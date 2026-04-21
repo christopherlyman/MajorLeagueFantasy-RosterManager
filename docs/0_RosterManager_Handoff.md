@@ -297,9 +297,18 @@ If development resumes later, recommended order:
 ---
 
 ## GitHub / repo status
-This tool still needs to be added cleanly to the user’s Git repo as a next priority after documentation.
+Repository is now live and public:
 
-Do **documentation first, then GitHub**.
+- GitHub: `https://github.com/christopherlyman/MajorLeagueFantasy-RosterManager`
+- Remote: `origin`
+- Default branch: `main`
+- Local branch tracks `origin/main`
+- License: `MIT`
+
+Operational rule:
+- make documentation/code changes locally
+- commit in small deterministic increments
+- push to `origin/main`
 
 ---
 
