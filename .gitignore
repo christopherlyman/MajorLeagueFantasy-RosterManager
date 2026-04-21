@@ -1,0 +1,11 @@
+﻿.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.pyo
+data/raw/
+data/derived/
+runtime/logs/
+runtime/status/
+.streamlit/secrets.toml

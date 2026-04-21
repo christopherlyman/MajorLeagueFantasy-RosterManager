@@ -1,0 +1,6 @@
+dash
+dash-ag-grid
+psycopg[binary]
+pandas
+requests
+streamlit

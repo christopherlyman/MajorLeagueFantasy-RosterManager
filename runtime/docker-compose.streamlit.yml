@@ -1,0 +1,20 @@
+services:
+  roster_manager_streamlit:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: mlf_roster_manager_streamlit
+    working_dir: /app
+    command: streamlit run /app/streamlit_app.py --server.port 8503 --server.address 0.0.0.0
+    env_file:
+      - ../.env
+    volumes:
+      - ..:/app
+    ports:
+      - "8503:8503"
+    networks:
+      - mlf_net
+
+networks:
+  mlf_net:
+    external: true

@@ -1,0 +1,31 @@
+name: mlf_roster_manager
+
+services:
+  roster_manager:
+    build:
+      context: /Volume1/Bots/fantasy/mlf_roster_manager
+      dockerfile: Dockerfile
+    image: mlf_roster_manager:latest
+    container_name: mlf_roster_manager
+    env_file:
+      - /Volume1/Bots/fantasy/mlf_roster_manager/.env
+    environment:
+      PYTHONPATH: /app:/shared
+      PORT: "8050"
+    working_dir: /app
+    command:
+      - python
+      - roster_manager.py
+    ports:
+      - "8050:8050"
+    volumes:
+      - /Volume1/Bots/fantasy/mlf_roster_manager:/app
+      - /Volume1/Bots/fantasy/shared:/shared:ro
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+networks:
+  mlf_net:
+    external: true
+    name: mlf_net

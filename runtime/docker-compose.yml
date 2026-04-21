@@ -1,0 +1,22 @@
+services:
+  roster_manager:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: mlf_roster_manager
+    working_dir: /app
+    command: streamlit run /app/streamlit_app.py --server.port 8050 --server.address 0.0.0.0
+    env_file:
+      - ../.env
+    volumes:
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Volume1/@apps/DockerEngine/dockerd/bin/docker:/usr/local/bin/docker:ro
+    ports:
+      - "8050:8050"
+    networks:
+      - mlf_net
+
+networks:
+  mlf_net:
+    external: true
