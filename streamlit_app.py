@@ -309,9 +309,10 @@ st.caption(
 )
 
 if any(float(r.get("lineup_points", 0.0)) <= -30.0 for r in rows):
-    st.warning(
-        "Some lineup penalties are still being driven by incomplete lineup ingestion. "
-        "Treat any -30.0 lineup modifier cautiously until that backend seam is hardened."
+    st.caption(
+        "Lineup note: the Lineup column is the source of truth. "
+        "A -30.0 lineup modifier is expected when a posted lineup omits the player; "
+        "only treat it cautiously if the Lineup status looks inconsistent."
     )
 
 for slot_id, _slot_type in SLOT_ORDER:
