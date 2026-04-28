@@ -9,3 +9,7 @@ data/derived/
 runtime/logs/
 runtime/status/
 .streamlit/secrets.toml
+
+*.bak
+
+*.tmp
