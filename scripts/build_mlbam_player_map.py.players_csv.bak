@@ -83,25 +83,6 @@ def load_current_roster_batters(src: Path):
             )
     return out
 
-
-def load_players_csv(src: Path):
-    if not src.exists():
-        raise FileNotFoundError(f"Missing players CSV: {src}")
-
-    out = []
-    with src.open(encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            player_name = (row.get("player_name") or row.get("full_name") or "").strip()
-            editorial_team_abbr = (row.get("editorial_team_abbr") or row.get("mlb_team_abbr") or "").strip()
-            if player_name:
-                out.append(
-                    {
-                        "player_name": player_name,
-                        "editorial_team_abbr": editorial_team_abbr,
-                    }
-                )
-    return out
-
 def normalize_team_name(text: str) -> str:
     return " ".join(str(text or "").strip().lower().split())
 
@@ -146,17 +127,13 @@ def resolve_mlbam_id(session: requests.Session, player_name: str, editorial_team
 def main():
     parser = argparse.ArgumentParser(description="Build MLBAM player-id map for current roster hitters")
     parser.add_argument("--src", required=True, help="Roster JSON source")
-    parser.add_argument("--players-csv", required=False, help="Optional CSV with player_name and editorial_team_abbr columns; overrides roster-derived batter list")
     parser.add_argument("--out", required=True, help="Output CSV path")
     args = parser.parse_args()
 
     src = Path(args.src)
     out = Path(args.out)
 
-    if args.players_csv:
-        batters = load_players_csv(Path(args.players_csv))
-    else:
-        batters = load_current_roster_batters(src)
+    batters = load_current_roster_batters(src)
 
     rows = []
     with requests.Session() as session:

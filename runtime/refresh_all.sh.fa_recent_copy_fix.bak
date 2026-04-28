@@ -312,21 +312,15 @@ for row in rows[:30]:
 PYFA
 "
 
-docker cp   "mlf_roster_manager:/app/data/derived/true_free_agent_batters_${TODAY}.csv"   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"
-
-docker cp   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"   "mlf_draftboard:/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv"
-
 docker exec -i mlf_draftboard bash -lc "
 cd /app/scripts/yahoo && \
-YAHOO_PLAYERS_CSV=/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv \
-YAHOO_RECENT_OUT=/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
+YAHOO_PLAYERS_CSV=/app/mlf_roster_manager/data/derived/true_free_agent_batters_${TODAY}.csv \
+YAHOO_RECENT_OUT=/app/mlf_roster_manager/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
 YAHOO_AS_OF_DATE=$TODAY \
 python refresh_recent_yahoo_api.py
 "
 
-docker cp   "mlf_draftboard:/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"   "$ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
-
-echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
+echo "WROTE $ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
 
 docker exec -i mlf_roster_manager bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \

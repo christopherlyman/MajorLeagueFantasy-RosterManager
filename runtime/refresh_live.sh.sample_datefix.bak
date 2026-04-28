@@ -223,7 +223,7 @@ echo "HAND_COUNT=$HAND_COUNT"
 
 stage "SAMPLE BATTING ROWS"
 docker exec -i mlf_roster_manager bash -lc "
-cd /app && DEFAULT_AS_OF_DATE=${TODAY} python - << 'PY'
+cd /app && python - << 'PY'
 from services.queries import get_default_context, fetch_batter_roster_rows
 
 ctx = get_default_context()

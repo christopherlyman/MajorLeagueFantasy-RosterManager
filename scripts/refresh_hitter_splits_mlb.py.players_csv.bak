@@ -60,19 +60,6 @@ def load_current_roster_batters(src: Path):
     return out
 
 
-def load_players_csv(src: Path):
-    if not src.exists():
-        raise FileNotFoundError(f"Missing players CSV: {src}")
-
-    out = []
-    with src.open(encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            player_name = (row.get("player_name") or row.get("full_name") or "").strip()
-            if player_name:
-                out.append({"player_name": player_name})
-    return out
-
-
 def load_mlbam_map(src: Path):
     if not src.exists():
         raise FileNotFoundError(f"Missing MLBAM map CSV: {src}")
@@ -185,7 +172,6 @@ def main():
     parser = argparse.ArgumentParser(description="Build hitter split inputs from MLB Stats API statSplits")
     parser.add_argument("--src", required=True, help="Roster JSON source")
     parser.add_argument("--map", required=True, help="MLBAM player map CSV")
-    parser.add_argument("--players-csv", required=False, help="Optional CSV with player_name column; overrides roster-derived batter list")
     parser.add_argument("--season-start", type=int, required=True, help="First season to include")
     parser.add_argument("--season-end", type=int, required=True, help="Last season to include")
     parser.add_argument("--out", required=True, help="Output CSV path")
@@ -195,10 +181,7 @@ def main():
     map_path = Path(args.map)
     out = Path(args.out)
 
-    if args.players_csv:
-        batters = load_players_csv(Path(args.players_csv))
-    else:
-        batters = load_current_roster_batters(src)
+    batters = load_current_roster_batters(src)
     mlbam_map = load_mlbam_map(map_path)
 
     rows = []

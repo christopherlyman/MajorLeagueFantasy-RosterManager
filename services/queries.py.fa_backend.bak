@@ -91,13 +91,8 @@ def _pick_hitter_split_file(as_of_date: str) -> Path:
     return _derived_root() / f"hitter_split_inputs_{as_of_date}.csv"
 
 
-def _pick_hitter_split_file_fa(as_of_date: str) -> Path:
-    return _derived_root() / f"hitter_split_inputs_fa_{as_of_date}.csv"
-
-
-def _pick_recent7_file(as_of_date: str, variant: str = "roster") -> Path:
-    suffix = "" if variant == "roster" else f"_{variant}"
-    return _derived_root() / f"recent7_hitter_inputs{suffix}_{as_of_date}.csv"
+def _pick_recent7_file(as_of_date: str) -> Path:
+    return _derived_root() / f"recent7_hitter_inputs_{as_of_date}.csv"
 
 
 def _split_positions(value):
@@ -224,11 +219,8 @@ def _load_pitcher_hand_map(as_of_date: str) -> dict[str, dict]:
     return out
 
 
-def _load_hitter_split_map(as_of_date: str, variant: str = "roster") -> dict[str, dict]:
-    if variant == "fa":
-        path = _pick_hitter_split_file_fa(as_of_date)
-    else:
-        path = _pick_hitter_split_file(as_of_date)
+def _load_hitter_split_map(as_of_date: str) -> dict[str, dict]:
+    path = _pick_hitter_split_file(as_of_date)
     if not path.exists():
         return {}
 
@@ -243,8 +235,8 @@ def _load_hitter_split_map(as_of_date: str, variant: str = "roster") -> dict[str
     return out
 
 
-def _load_recent7_map(as_of_date: str, variant: str = "roster") -> dict[str, dict]:
-    path = _pick_recent7_file(as_of_date, variant=variant)
+def _load_recent7_map(as_of_date: str) -> dict[str, dict]:
+    path = _pick_recent7_file(as_of_date)
     if not path.exists():
         return {}
 
@@ -468,223 +460,5 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
     return rows
 
 
-
-def _pick_true_free_agent_candidate_file(as_of_date: str) -> Path:
-    return Path(__file__).resolve().parents[1] / "data" / "derived" / f"true_free_agent_batters_{as_of_date}.csv"
-
-
-def _load_true_free_agent_candidate_keys(as_of_date: str) -> set[tuple[str, str]]:
-    path = _pick_true_free_agent_candidate_file(as_of_date)
-    if not path.exists():
-        return set()
-
-    out: set[tuple[str, str]] = set()
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            name = str(row.get("player_name") or "").strip()
-            team = str(row.get("editorial_team_abbr") or "").strip().upper()
-            if name:
-                out.add((normalize_name(name), team))
-    return out
-
-
 def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str):
-    sql = """
-    WITH games AS (
-        SELECT
-            raw_json,
-            away_team_name,
-            home_team_name,
-            away_probable_pitcher_name,
-            home_probable_pitcher_name
-        FROM lineup_tool.mlb_probable_pitcher_daily
-        WHERE as_of_date = %s
-    )
-    SELECT
-        p.full_name AS player_name,
-        p.editorial_team_abbr AS mlb_team_abbr,
-        '' AS current_slot,
-        p.eligible_positions,
-        '' AS status,
-        p.yahoo_player_key,
-        p.percent_owned,
-        p.rank_value,
-        CASE
-            WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN g.home_probable_pitcher_name
-            WHEN g.raw_json->'teams'->'home'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN g.away_probable_pitcher_name
-            ELSE ''
-        END AS opposing_probable_pitcher,
-        CASE
-            WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN g.home_team_name
-            WHEN g.raw_json->'teams'->'home'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN g.away_team_name
-            ELSE ''
-        END AS opponent_team,
-        CASE
-            WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN FALSE
-            WHEN g.raw_json->'teams'->'home'->'team'->>'abbreviation' = p.editorial_team_abbr
-                THEN TRUE
-            ELSE NULL
-        END AS is_home,
-        COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc
-    FROM public.yahoo_league_player_pool p
-    LEFT JOIN games g
-      ON g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
-      OR g.raw_json->'teams'->'home'->'team'->>'abbreviation' = p.editorial_team_abbr
-    LEFT JOIN lineup_tool.roster_snapshot r
-      ON r.league_key = %s
-     AND r.as_of_date = %s
-     AND r.yahoo_player_key = p.yahoo_player_key
-    WHERE p.league_key = %s
-      AND p.season_year = %s
-      AND r.yahoo_player_key IS NULL
-      AND NOT (
-        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
-      )
-    ORDER BY
-      COALESCE(p.rank_value, 999999),
-      COALESCE(p.percent_owned, -1) DESC,
-      p.full_name
-    LIMIT 300;
-    """
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM lineup_tool.mlb_probable_pitcher_daily WHERE as_of_date = %s",
-                (as_of_date,),
-            )
-            day_game_rows = cur.fetchone()[0]
-
-            cur.execute(
-                sql,
-                (
-                    as_of_date,
-                    league_key,
-                    as_of_date,
-                    league_key,
-                    _season_year(as_of_date),
-                ),
-            )
-            cols = [d.name for d in cur.description]
-            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    candidate_keys = _load_true_free_agent_candidate_keys(as_of_date)
-    if candidate_keys:
-        rows = [
-            r for r in rows
-            if (
-                normalize_name(str(r.get("player_name") or "")),
-                str(r.get("mlb_team_abbr") or "").strip().upper(),
-            ) in candidate_keys
-        ]
-
-
-    year = _season_year(as_of_date)
-    hitter_savant = _load_savant_map("batters", year)
-    pitcher_savant = _load_savant_map("pitchers", year)
-    lineup_map, lineup_team_map, lineup_data_status = _load_lineup_map(as_of_date)
-    pitcher_hand_map = _load_pitcher_hand_map(as_of_date)
-    hitter_split_map = _load_hitter_split_map(as_of_date, variant="fa")
-    recent7_map = _load_recent7_map(as_of_date, variant="fa")
-
-    for r in rows:
-        r["slot_display"] = _slot_display(r.get("current_slot"))
-        r["player_display"] = _player_display(r.get("player_name", ""), r.get("mlb_team_abbr", ""))
-        r["eligible_display"] = _clean_eligible_positions(r.get("eligible_positions"))
-        r["status_display"] = _status_display(r.get("status"))
-        r["_slot_sort"] = _slot_sort_key(r.get("current_slot"))
-
-        if day_game_rows == 0:
-            r["game_status"] = "GAME_DATA_MISSING"
-            r["game_display"] = "Game data missing"
-            r["game_started"] = False
-        elif r.get("opponent_team") or r.get("game_date_utc"):
-            r["game_status"] = "GAME_FOUND"
-            r["game_time_et"] = _format_game_time_et(r.get("game_date_utc", ""))
-            r["game_daypart"] = _game_daypart_et(r.get("game_date_utc", ""))
-            r["game_started"] = _game_started_et(r.get("game_date_utc", ""))
-            r["game_display"] = _game_display(r.get("opponent_team", ""), r.get("is_home"), r["game_time_et"])
-        else:
-            r["game_status"] = "NO_GAME_TODAY"
-            r["game_display"] = "No game today"
-            r["game_daypart"] = ""
-            r["game_started"] = False
-
-        hitter_row = hitter_savant.get(normalize_name(r.get("player_name", "")), {})
-        pitcher_row = pitcher_savant.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
-        hand_row = pitcher_hand_map.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
-        split_row = hitter_split_map.get(normalize_name(r.get("player_name", "")), {})
-        recent_row = recent7_map.get(normalize_name(r.get("player_name", "")), {})
-
-        lineup_row = lineup_map.get(
-            (normalize_name(r.get("player_name", "")), str(r.get("mlb_team_abbr", "")).strip().upper())
-        )
-        lineup_team_row = lineup_team_map.get(str(r.get("mlb_team_abbr", "")).strip().upper())
-
-        if lineup_data_status == "LINEUP_DATA_MISSING":
-            r["lineup_status"] = "LINEUP_DATA_MISSING"
-        elif r.get("game_status") != "GAME_FOUND":
-            r["lineup_status"] = "LINEUP_NOT_APPLICABLE"
-        elif lineup_row:
-            r["lineup_status"] = "IN_POSTED_LINEUP"
-        elif lineup_team_row and str(lineup_team_row.get("lineup_posted", "")).strip().upper() == "Y":
-            r["lineup_status"] = "POSTED_BUT_NOT_FOUND"
-        else:
-            r["lineup_status"] = "LINEUP_NOT_CONFIRMED"
-
-        r["hitter_pa"] = hitter_row.get("pa", "")
-        r["hitter_ba"] = hitter_row.get("ba", "")
-        r["hitter_est_woba"] = hitter_row.get("est_woba", "")
-        r["hitter_woba_gap"] = hitter_row.get("est_woba_minus_woba_diff", "")
-        r["pitcher_pa"] = pitcher_row.get("pa", "")
-        r["pitcher_est_woba_allowed"] = pitcher_row.get("est_woba", "")
-        r["pitcher_xera"] = pitcher_row.get("xera", "")
-        r["opp_pitcher_throws"] = (hand_row.get("throws") or "").strip().upper()
-
-        r["overall_ops"] = split_row.get("overall_ops", "")
-        r["split_vs_rhp_ops"] = split_row.get("vs_rhp_ops", "")
-        r["split_vs_rhp_ab"] = split_row.get("vs_rhp_ab", "")
-        r["split_vs_lhp_ops"] = split_row.get("vs_lhp_ops", "")
-        r["split_vs_lhp_ab"] = split_row.get("vs_lhp_ab", "")
-        r["split_home_ops"] = split_row.get("home_ops", "")
-        r["split_home_ab"] = split_row.get("home_ab", "")
-        r["split_away_ops"] = split_row.get("away_ops", "")
-        r["split_away_ab"] = split_row.get("away_ab", "")
-        r["split_day_ops"] = split_row.get("day_ops", "")
-        r["split_day_ab"] = split_row.get("day_ab", "")
-        r["split_night_ops"] = split_row.get("night_ops", "")
-        r["split_night_ab"] = split_row.get("night_ab", "")
-        r["recent7_hits"] = recent_row.get("recent7_hits", "")
-        r["recent7_ab"] = recent_row.get("recent7_ab", "")
-        r["recent7_avg"] = recent_row.get("recent7_avg", "")
-        r["recent7_r"] = recent_row.get("recent7_r", "")
-        r["recent7_hr"] = recent_row.get("recent7_hr", "")
-        r["recent7_rbi"] = recent_row.get("recent7_rbi", "")
-        r["recent7_sb"] = recent_row.get("recent7_sb", "")
-        r["recent7_k"] = recent_row.get("recent7_k", "")
-
-        score = compute_usual_suspects_batter_ranking(r)
-        r.update(score)
-        r["comparison_delta"] = ""
-
-    rows.sort(key=lambda r: (-int(r.get("ranking", 0)), str(r.get("player_name", ""))))
-
-    deduped = []
-    seen_keys = set()
-    for r in rows:
-        key = str(r.get("yahoo_player_key", "")).strip()
-        if not key:
-            key = f"{normalize_name(r.get('player_name', ''))}|{str(r.get('mlb_team_abbr', '')).strip().upper()}"
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        deduped.append(r)
-
-    return deduped
+    return []

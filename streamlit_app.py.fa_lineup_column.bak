@@ -502,7 +502,6 @@ with tab_fa:
                     "Eligible": r.get("eligible_display", ""),
                     "Rank": r.get("ranking", ""),
                     "Game": game_with_pitcher(r),
-                    "Lineup": r.get("lineup_status", ""),
                     "Status": r.get("status_display", ""),
                     "Rank Reason": compress_rank_reason(r.get("note_short", "")),
                 }

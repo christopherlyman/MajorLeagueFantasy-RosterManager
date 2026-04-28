@@ -166,167 +166,52 @@ from services.db import get_connection
 as_of_date = '${TODAY}'
 league_key = '${LEAGUE_KEY}'
 season_year = int(as_of_date[:4])
-mode = '${MODE}'
 out = Path('/app/data/derived/true_free_agent_batters_${TODAY}.csv')
 
-sql_all = '''
-WITH fa_base AS (
-    SELECT
-        p.full_name,
-        p.editorial_team_abbr,
-        p.yahoo_player_key,
-        p.eligible_positions,
-        p.rank_value,
-        p.percent_owned
-    FROM public.yahoo_league_player_pool p
-    LEFT JOIN lineup_tool.roster_snapshot r
-      ON r.league_key = p.league_key
-     AND r.as_of_date = %s
-     AND r.yahoo_player_key = p.yahoo_player_key
-    WHERE p.league_key = %s
-      AND p.season_year = %s
-      AND r.yahoo_player_key IS NULL
-      AND NOT (
-        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
-      )
-)
+sql = '''
 SELECT
-    full_name,
-    editorial_team_abbr
-FROM fa_base
+    p.full_name AS player_name,
+    p.editorial_team_abbr
+FROM public.yahoo_league_player_pool p
+LEFT JOIN lineup_tool.roster_snapshot r
+  ON r.league_key = p.league_key
+ AND r.as_of_date = %s
+ AND r.yahoo_player_key = p.yahoo_player_key
+WHERE p.league_key = %s
+  AND p.season_year = %s
+  AND r.yahoo_player_key IS NULL
+  AND NOT (
+    COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
+    OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
+    OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
+  )
 ORDER BY
-  COALESCE(rank_value, 999999),
-  COALESCE(percent_owned, -1) DESC,
-  full_name
-'''
-
-sql_daily = '''
-WITH game_teams AS (
-    SELECT DISTINCT raw_json->'teams'->'away'->'team'->>'abbreviation' AS team_abbr
-    FROM lineup_tool.mlb_probable_pitcher_daily
-    WHERE as_of_date = %s
-    UNION
-    SELECT DISTINCT raw_json->'teams'->'home'->'team'->>'abbreviation' AS team_abbr
-    FROM lineup_tool.mlb_probable_pitcher_daily
-    WHERE as_of_date = %s
-),
-fa_base AS (
-    SELECT
-        p.full_name,
-        p.editorial_team_abbr,
-        p.yahoo_player_key,
-        p.eligible_positions,
-        p.rank_value,
-        p.percent_owned
-    FROM public.yahoo_league_player_pool p
-    LEFT JOIN lineup_tool.roster_snapshot r
-      ON r.league_key = p.league_key
-     AND r.as_of_date = %s
-     AND r.yahoo_player_key = p.yahoo_player_key
-    WHERE p.league_key = %s
-      AND p.season_year = %s
-      AND r.yahoo_player_key IS NULL
-      AND p.editorial_team_abbr IN (SELECT team_abbr FROM game_teams)
-      AND NOT (
-        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
-      )
-),
-expanded AS (
-    SELECT
-        b.full_name,
-        b.editorial_team_abbr,
-        b.yahoo_player_key,
-        COALESCE(b.rank_value, 999999) AS rank_value,
-        COALESCE(b.percent_owned, -1) AS percent_owned,
-        pos.position
-    FROM fa_base b
-    CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(b.eligible_positions, '[]'::jsonb)) AS pos(position)
-    WHERE pos.position IN ('C', '1B', '2B', '3B', 'SS', 'OF')
-      AND (
-        COALESCE(b.rank_value, 999999) <= 400
-        OR COALESCE(b.percent_owned, -1) >= 5
-      )
-),
-ranked AS (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY position
-            ORDER BY rank_value, percent_owned DESC, full_name
-        ) AS pos_rn
-    FROM expanded
-),
-selected AS (
-    SELECT DISTINCT yahoo_player_key
-    FROM ranked
-    WHERE (position = 'OF' AND pos_rn <= 20)
-       OR (position IN ('C', '1B', '2B', '3B', 'SS') AND pos_rn <= 10)
-
-    UNION
-
-    SELECT yahoo_player_key
-    FROM fa_base
-    WHERE COALESCE(rank_value, 999999) <= 50
-)
-SELECT
-    b.yahoo_player_key,
-    b.full_name,
-    b.editorial_team_abbr
-FROM fa_base b
-JOIN selected s
-  ON s.yahoo_player_key = b.yahoo_player_key
-ORDER BY
-  COALESCE(b.rank_value, 999999),
-  COALESCE(b.percent_owned, -1) DESC,
-  b.full_name
+  COALESCE(p.rank_value, 999999),
+  COALESCE(p.percent_owned, -1) DESC,
+  p.full_name
 '''
 
 with get_connection() as conn:
     with conn.cursor() as cur:
-        if mode == 'daily':
-            cur.execute(sql_daily, (as_of_date, as_of_date, as_of_date, league_key, season_year))
-        else:
-            cur.execute(sql_all, (as_of_date, league_key, season_year))
+        cur.execute(sql, (as_of_date, league_key, season_year))
         rows = cur.fetchall()
 
 out.parent.mkdir(parents=True, exist_ok=True)
 with out.open('w', newline='', encoding='utf-8') as f:
-    writer = csv.DictWriter(f, fieldnames=['yahoo_player_key', 'player_name', 'editorial_team_abbr'])
+    writer = csv.DictWriter(f, fieldnames=['player_name', 'editorial_team_abbr'])
     writer.writeheader()
-    for yahoo_player_key, player_name, editorial_team_abbr in rows:
+    for player_name, editorial_team_abbr in rows:
         writer.writerow({
-            'yahoo_player_key': yahoo_player_key or '',
             'player_name': player_name,
             'editorial_team_abbr': editorial_team_abbr or '',
         })
 
 print(f'WROTE {out}')
-print(f'MODE {mode}')
 print(f'ROWS {len(rows)}')
-for row in rows[:30]:
-    print(f'{row[0]} | {row[1]} | {row[2]}')
+for row in rows[:20]:
+    print(f'{row[0]} | {row[1]}')
 PYFA
 "
-
-docker cp   "mlf_roster_manager:/app/data/derived/true_free_agent_batters_${TODAY}.csv"   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"
-
-docker cp   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"   "mlf_draftboard:/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv"
-
-docker exec -i mlf_draftboard bash -lc "
-cd /app/scripts/yahoo && \
-YAHOO_PLAYERS_CSV=/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv \
-YAHOO_RECENT_OUT=/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
-YAHOO_AS_OF_DATE=$TODAY \
-python refresh_recent_yahoo_api.py
-"
-
-docker cp   "mlf_draftboard:/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"   "$ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
-
-echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
 
 docker exec -i mlf_roster_manager bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \

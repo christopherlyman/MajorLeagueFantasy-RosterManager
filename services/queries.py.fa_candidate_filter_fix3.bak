@@ -95,9 +95,8 @@ def _pick_hitter_split_file_fa(as_of_date: str) -> Path:
     return _derived_root() / f"hitter_split_inputs_fa_{as_of_date}.csv"
 
 
-def _pick_recent7_file(as_of_date: str, variant: str = "roster") -> Path:
-    suffix = "" if variant == "roster" else f"_{variant}"
-    return _derived_root() / f"recent7_hitter_inputs{suffix}_{as_of_date}.csv"
+def _pick_recent7_file(as_of_date: str) -> Path:
+    return _derived_root() / f"recent7_hitter_inputs_{as_of_date}.csv"
 
 
 def _split_positions(value):
@@ -243,8 +242,8 @@ def _load_hitter_split_map(as_of_date: str, variant: str = "roster") -> dict[str
     return out
 
 
-def _load_recent7_map(as_of_date: str, variant: str = "roster") -> dict[str, dict]:
-    path = _pick_recent7_file(as_of_date, variant=variant)
+def _load_recent7_map(as_of_date: str) -> dict[str, dict]:
+    path = _pick_recent7_file(as_of_date)
     if not path.exists():
         return {}
 
@@ -377,6 +376,16 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    candidate_keys = _load_true_free_agent_candidate_keys(as_of_date)
+    if candidate_keys:
+        rows = [
+            r for r in rows
+            if (
+                normalize_name(str(r.get("player_name") or "")),
+                str(r.get("mlb_team_abbr") or "").strip().upper(),
+            ) in candidate_keys
+        ]
+
     year = _season_year(as_of_date)
     hitter_savant = _load_savant_map("batters", year)
     pitcher_savant = _load_savant_map("pitchers", year)
@@ -470,7 +479,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
 
 
 def _pick_true_free_agent_candidate_file(as_of_date: str) -> Path:
-    return Path(__file__).resolve().parents[1] / "data" / "derived" / f"true_free_agent_batters_{as_of_date}.csv"
+    return DERIVED_DIR / f"true_free_agent_batters_{as_of_date}.csv"
 
 
 def _load_true_free_agent_candidate_keys(as_of_date: str) -> set[tuple[str, str]]:
@@ -575,16 +584,6 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
             )
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    candidate_keys = _load_true_free_agent_candidate_keys(as_of_date)
-    if candidate_keys:
-        rows = [
-            r for r in rows
-            if (
-                normalize_name(str(r.get("player_name") or "")),
-                str(r.get("mlb_team_abbr") or "").strip().upper(),
-            ) in candidate_keys
-        ]
-
 
     year = _season_year(as_of_date)
     hitter_savant = _load_savant_map("batters", year)
@@ -592,7 +591,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
     lineup_map, lineup_team_map, lineup_data_status = _load_lineup_map(as_of_date)
     pitcher_hand_map = _load_pitcher_hand_map(as_of_date)
     hitter_split_map = _load_hitter_split_map(as_of_date, variant="fa")
-    recent7_map = _load_recent7_map(as_of_date, variant="fa")
+    recent7_map = _load_recent7_map(as_of_date)
 
     for r in rows:
         r["slot_display"] = _slot_display(r.get("current_slot"))

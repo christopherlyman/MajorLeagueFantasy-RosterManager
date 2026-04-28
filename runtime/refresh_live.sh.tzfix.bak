@@ -9,7 +9,7 @@ fi
 ENV_FILE="$ROOT/.env"
 LOG_DIR="$ROOT/runtime/logs"
 STATUS_DIR="$ROOT/runtime/status"
-TODAY="${1:-$(TZ=America/New_York date +%F)}"
+TODAY="${1:-$(date +%F)}"
 
 mkdir -p "$LOG_DIR" "$STATUS_DIR"
 LOG_FILE="$LOG_DIR/refresh_live_${TODAY}_$(date +%H%M%S).log"
@@ -223,7 +223,7 @@ echo "HAND_COUNT=$HAND_COUNT"
 
 stage "SAMPLE BATTING ROWS"
 docker exec -i mlf_roster_manager bash -lc "
-cd /app && DEFAULT_AS_OF_DATE=${TODAY} python - << 'PY'
+cd /app && python - << 'PY'
 from services.queries import get_default_context, fetch_batter_roster_rows
 
 ctx = get_default_context()

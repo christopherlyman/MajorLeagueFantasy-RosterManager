@@ -95,9 +95,8 @@ def _pick_hitter_split_file_fa(as_of_date: str) -> Path:
     return _derived_root() / f"hitter_split_inputs_fa_{as_of_date}.csv"
 
 
-def _pick_recent7_file(as_of_date: str, variant: str = "roster") -> Path:
-    suffix = "" if variant == "roster" else f"_{variant}"
-    return _derived_root() / f"recent7_hitter_inputs{suffix}_{as_of_date}.csv"
+def _pick_recent7_file(as_of_date: str) -> Path:
+    return _derived_root() / f"recent7_hitter_inputs_{as_of_date}.csv"
 
 
 def _split_positions(value):
@@ -243,8 +242,8 @@ def _load_hitter_split_map(as_of_date: str, variant: str = "roster") -> dict[str
     return out
 
 
-def _load_recent7_map(as_of_date: str, variant: str = "roster") -> dict[str, dict]:
-    path = _pick_recent7_file(as_of_date, variant=variant)
+def _load_recent7_map(as_of_date: str) -> dict[str, dict]:
+    path = _pick_recent7_file(as_of_date)
     if not path.exists():
         return {}
 
@@ -592,7 +591,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
     lineup_map, lineup_team_map, lineup_data_status = _load_lineup_map(as_of_date)
     pitcher_hand_map = _load_pitcher_hand_map(as_of_date)
     hitter_split_map = _load_hitter_split_map(as_of_date, variant="fa")
-    recent7_map = _load_recent7_map(as_of_date, variant="fa")
+    recent7_map = _load_recent7_map(as_of_date)
 
     for r in rows:
         r["slot_display"] = _slot_display(r.get("current_slot"))

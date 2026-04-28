@@ -327,67 +327,24 @@ with st.sidebar:
     lock_path = "/tmp/mlf_refresh_all.lock"
     refresh_running = os.path.exists(lock_path)
 
-    st.caption(
-        "Quick = roster, games, lineups. "
-        "Daily = quick + league rosters + current scoring artifacts. "
-        "Full = daily + Yahoo player-pool meta. "
-        "Deep = full + Yahoo historical stats."
-    )
-
-    refresh_choice = None
-
-    col1, col2 = st.columns(2)
-    if col1.button(
-        "Quick Refresh",
-        type="secondary",
-        use_container_width=True,
-        disabled=refresh_running,
-        key="refresh_quick_btn",
-    ):
-        refresh_choice = ("Quick Refresh", "/app/runtime/refresh_quick.sh")
-
-    if col2.button(
-        "Daily Refresh",
+    if st.button(
+        "Refresh All",
         type="primary",
         use_container_width=True,
         disabled=refresh_running,
-        key="refresh_daily_btn",
+        key="refresh_all_btn",
     ):
-        refresh_choice = ("Daily Refresh", "/app/runtime/refresh_daily.sh")
-
-    col3, col4 = st.columns(2)
-    if col3.button(
-        "Full Refresh",
-        type="secondary",
-        use_container_width=True,
-        disabled=refresh_running,
-        key="refresh_full_btn",
-    ):
-        refresh_choice = ("Full Refresh", "/app/runtime/refresh_full.sh")
-
-    if col4.button(
-        "Deep Refresh",
-        type="secondary",
-        use_container_width=True,
-        disabled=refresh_running,
-        key="refresh_deep_btn",
-    ):
-        refresh_choice = ("Deep Refresh", "/app/runtime/refresh_deep.sh")
-
-    if refresh_choice:
-        refresh_label, refresh_script = refresh_choice
         try:
             with open(lock_path, "w", encoding="utf-8") as _lock:
                 _lock.write("running\n")
 
-            with st.spinner(f"{refresh_label} running..."):
+            with st.spinner("Refreshing all data..."):
                 proc = subprocess.run(
-                    ["/bin/bash", refresh_script],
+                    ["/bin/bash", "/app/runtime/refresh_all.sh"],
                     capture_output=True,
                     text=True,
                 )
 
-            st.session_state["last_refresh_mode"] = refresh_label
             st.session_state["last_refresh_returncode"] = proc.returncode
             st.session_state["last_refresh_stdout"] = proc.stdout[-20000:]
             st.session_state["last_refresh_stderr"] = proc.stderr[-8000:]
@@ -398,10 +355,10 @@ with st.sidebar:
                     st.cache_resource.clear()
                 except Exception:
                     pass
-                st.success(f"{refresh_label} completed.")
+                st.success("Refresh All completed.")
                 st.rerun()
             else:
-                st.error(f"{refresh_label} failed.")
+                st.error("Refresh All failed.")
         finally:
             if os.path.exists(lock_path):
                 os.remove(lock_path)
@@ -410,9 +367,7 @@ with st.sidebar:
         st.info("Refresh already running.")
 
     if "last_refresh_stdout" in st.session_state:
-        with st.expander(
-            f"Last refresh log ({st.session_state.get('last_refresh_mode', 'Unknown')})"
-        ):
+        with st.expander("Last refresh log"):
             st.code(st.session_state.get("last_refresh_stdout", ""))
             stderr = st.session_state.get("last_refresh_stderr", "")
             if stderr:
@@ -471,7 +426,7 @@ with tab_fa:
         if "fa_slot_filter" not in st.session_state:
             st.session_state["fa_slot_filter"] = "All"
 
-        fa_filters = ["All", "C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"]
+        fa_filters = ["All", "C", "1B", "2B", "3B", "SS", "OF", "UTIL"]
         current_filter = st.radio(
             "FA Position Filter",
             options=fa_filters,
@@ -480,17 +435,11 @@ with tab_fa:
             label_visibility="collapsed",
             key="fa_slot_filter",
         )
-        def fa_matches_filter(row, slot):
-            if slot == "All":
-                return True
-            if slot == "IF":
-                return any(
-                    eligible_for_slot(row, s)
-                    for s in ("1B", "2B", "3B", "SS", "IF")
-                )
-            return eligible_for_slot(row, slot)
-
-        filtered_batters = [r for r in available_batters if fa_matches_filter(r, current_filter)]
+        filtered_batters = (
+            available_batters
+            if current_filter == "All"
+            else [r for r in available_batters if eligible_for_slot(r, current_filter)]
+        )
 
         st.caption(f"Filter: {current_filter} | Free Agents: {len(filtered_batters)}")
 
@@ -501,8 +450,8 @@ with tab_fa:
                     "Player": r.get("player_display", ""),
                     "Eligible": r.get("eligible_display", ""),
                     "Rank": r.get("ranking", ""),
+                    "Delta": r.get("comparison_delta", ""),
                     "Game": game_with_pitcher(r),
-                    "Lineup": r.get("lineup_status", ""),
                     "Status": r.get("status_display", ""),
                     "Rank Reason": compress_rank_reason(r.get("note_short", "")),
                 }
