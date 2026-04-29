@@ -128,15 +128,16 @@ else
 fi
 
 stage "REFRESH ALL: RECENT PIPELINE"
-docker exec -i mlf_draftboard bash -lc "
+docker exec -i mlf_roster_manager bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_TEAM_KEY=$TEAM_KEY \
 YAHOO_AS_OF_DATE=$TODAY \
+YAHOO_RECENT_OUT=/app/data/derived/recent7_hitter_inputs_${TODAY}.csv \
 python refresh_recent_yahoo_api.py
 "
 
 docker cp \
-  "mlf_draftboard:/app/scripts/yahoo/data/derived/recent7_hitter_inputs_${TODAY}.csv" \
+  "mlf_roster_manager:/app/data/derived/recent7_hitter_inputs_${TODAY}.csv" \
   "$ROOT/data/derived/recent7_hitter_inputs_${TODAY}.csv"
 
 echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_${TODAY}.csv"
@@ -214,13 +215,14 @@ WITH game_teams AS (
 ),
 fa_base AS (
     SELECT
+        p.yahoo_player_key,
         p.full_name,
         p.editorial_team_abbr,
-        p.yahoo_player_key,
-        p.eligible_positions,
         p.rank_value,
         p.percent_owned
     FROM public.yahoo_league_player_pool p
+    JOIN game_teams gt
+      ON gt.team_abbr = p.editorial_team_abbr
     LEFT JOIN lineup_tool.roster_snapshot r
       ON r.league_key = p.league_key
      AND r.as_of_date = %s
@@ -228,61 +230,25 @@ fa_base AS (
     WHERE p.league_key = %s
       AND p.season_year = %s
       AND r.yahoo_player_key IS NULL
-      AND p.editorial_team_abbr IN (SELECT team_abbr FROM game_teams)
       AND NOT (
         COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
         OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
         OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
       )
-),
-expanded AS (
-    SELECT
-        b.full_name,
-        b.editorial_team_abbr,
-        b.yahoo_player_key,
-        COALESCE(b.rank_value, 999999) AS rank_value,
-        COALESCE(b.percent_owned, -1) AS percent_owned,
-        pos.position
-    FROM fa_base b
-    CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(b.eligible_positions, '[]'::jsonb)) AS pos(position)
-    WHERE pos.position IN ('C', '1B', '2B', '3B', 'SS', 'OF')
       AND (
-        COALESCE(b.rank_value, 999999) <= 400
-        OR COALESCE(b.percent_owned, -1) >= 5
+        COALESCE(p.rank_value, 999999) <= 600
+        OR COALESCE(p.percent_owned, -1) >= 1
       )
-),
-ranked AS (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY position
-            ORDER BY rank_value, percent_owned DESC, full_name
-        ) AS pos_rn
-    FROM expanded
-),
-selected AS (
-    SELECT DISTINCT yahoo_player_key
-    FROM ranked
-    WHERE (position = 'OF' AND pos_rn <= 20)
-       OR (position IN ('C', '1B', '2B', '3B', 'SS') AND pos_rn <= 10)
-
-    UNION
-
-    SELECT yahoo_player_key
-    FROM fa_base
-    WHERE COALESCE(rank_value, 999999) <= 50
 )
 SELECT
-    b.yahoo_player_key,
-    b.full_name,
-    b.editorial_team_abbr
-FROM fa_base b
-JOIN selected s
-  ON s.yahoo_player_key = b.yahoo_player_key
+    yahoo_player_key,
+    full_name,
+    editorial_team_abbr
+FROM fa_base
 ORDER BY
-  COALESCE(b.rank_value, 999999),
-  COALESCE(b.percent_owned, -1) DESC,
-  b.full_name
+  COALESCE(rank_value, 999999),
+  COALESCE(percent_owned, -1) DESC,
+  full_name
 '''
 
 with get_connection() as conn:
@@ -312,19 +278,21 @@ for row in rows[:30]:
 PYFA
 "
 
-docker cp   "mlf_roster_manager:/app/data/derived/true_free_agent_batters_${TODAY}.csv"   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"
+docker cp \
+  "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv" \
+  "mlf_roster_manager:/app/data/derived/true_free_agent_batters_${TODAY}.csv"
 
-docker cp   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv"   "mlf_draftboard:/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv"
-
-docker exec -i mlf_draftboard bash -lc "
+docker exec -i mlf_roster_manager bash -lc "
 cd /app/scripts/yahoo && \
-YAHOO_PLAYERS_CSV=/app/scripts/yahoo/data/derived/true_free_agent_batters_${TODAY}.csv \
-YAHOO_RECENT_OUT=/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
 YAHOO_AS_OF_DATE=$TODAY \
+YAHOO_PLAYERS_CSV=/app/data/derived/true_free_agent_batters_${TODAY}.csv \
+YAHOO_RECENT_OUT=/app/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
 python refresh_recent_yahoo_api.py
 "
 
-docker cp   "mlf_draftboard:/app/scripts/yahoo/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"   "$ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
+docker cp \
+  "mlf_roster_manager:/app/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv" \
+  "$ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
 
 echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
 

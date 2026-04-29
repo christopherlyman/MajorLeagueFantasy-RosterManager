@@ -60,11 +60,11 @@ for TEAM_KEY in "${TEAM_KEYS[@]}"; do
   echo "============================================================"
 
   docker exec -i mlf_roster_manager bash -lc "
-cd /app/scripts/rmt_yahoo && YAHOO_TEAM_KEY=$TEAM_KEY python yahoo_team_roster.py
+cd /app/scripts/yahoo && YAHOO_TEAM_KEY=$TEAM_KEY python yahoo_team_roster.py
 "
 
   RAW_ROSTER_HOST="$ROOT/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
-  docker cp     "mlf_roster_manager:/app/scripts/rmt_yahoo/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json"     "$RAW_ROSTER_HOST"
+  docker cp     "mlf_roster_manager:/app/scripts/yahoo/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json"     "$RAW_ROSTER_HOST"
 
   echo "COPIED $RAW_ROSTER_HOST"
 

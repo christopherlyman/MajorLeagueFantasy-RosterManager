@@ -91,7 +91,15 @@ def get_player_daily_stats(session: requests.Session, headers: dict, player_key:
     )
     r = session.get(url, headers=headers, timeout=30)
     r.raise_for_status()
-    data = r.json()
+    try:
+        data = r.json()
+    except Exception:
+        body = " ".join((r.text or "").strip().split())[:200]
+        print(
+            f"WARN recent_non_json player_key={player_key} stat_date={stat_date} "
+            f"status_code={r.status_code} body={body}"
+        )
+        return {}
 
     player_stats_obj = None
     for node in walk(data):

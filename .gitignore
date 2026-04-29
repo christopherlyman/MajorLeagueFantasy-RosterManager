@@ -13,3 +13,23 @@ runtime/status/
 *.bak
 
 *.tmp
+# Local artifacts / backups
+*.bak
+*.tmp
+*.swp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime outputs
+runtime/logs/
+runtime/status/
+
+# Generated data
+data/raw/
+data/derived/
+
+# Local env
+.env
