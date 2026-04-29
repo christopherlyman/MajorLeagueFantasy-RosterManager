@@ -115,14 +115,14 @@ print(f"DEFAULT_AS_OF_DATE={today}")
 PY
 
 stage "REFRESH YAHOO ROSTER JSON"
-docker exec -i mlf_draftboard bash -lc "
-cd /app/scripts/yahoo && \
+docker exec -i mlf_roster_manager bash -lc "
+cd /app/scripts/rmt_yahoo && \
 YAHOO_TEAM_KEY=$TEAM_KEY python yahoo_team_roster.py
 "
 
 RAW_ROSTER_HOST="$ROOT/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
 docker cp \
-  "mlf_draftboard:/app/scripts/yahoo/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json" \
+  "mlf_roster_manager:/app/scripts/rmt_yahoo/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json" \
   "$RAW_ROSTER_HOST"
 
 echo "COPIED $RAW_ROSTER_HOST"
