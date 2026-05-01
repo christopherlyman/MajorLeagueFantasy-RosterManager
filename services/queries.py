@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from services.db import get_connection
-from services.scoring import compute_usual_suspects_batter_ranking
+from services.scoring import compute_usual_suspects_batter_ranking, ranking_band, START_WORTHY_THRESHOLD, MIN_RANKING, MAX_RANKING
 
 SLOT_ORDER = {
     "C": 1,
@@ -259,6 +259,104 @@ def _load_recent7_map(as_of_date: str, variant: str = "roster") -> dict[str, dic
     return out
 
 
+def _player_day_key(row: dict) -> str:
+    key = str(row.get("yahoo_player_key", "") or "").strip()
+    if key:
+        return key
+    return f"{normalize_name(str(row.get('player_name') or ''))}|{str(row.get('mlb_team_abbr') or '').strip().upper()}"
+
+
+def _mean_component(group: list[dict], field: str) -> float:
+    vals = []
+    for r in group:
+        try:
+            vals.append(float(r.get(field) or 0.0))
+        except Exception:
+            vals.append(0.0)
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(_player_day_key(r), []).append(r)
+
+    lineup_priority = {
+        "LINEUP_DATA_MISSING": 50,
+        "IN_POSTED_LINEUP": 40,
+        "POSTED_BUT_NOT_FOUND": 30,
+        "LINEUP_NOT_CONFIRMED": 20,
+        "LINEUP_NOT_APPLICABLE": 10,
+        "": 0,
+    }
+
+    collapsed: list[dict] = []
+    for group in grouped.values():
+        ordered = sorted(group, key=lambda r: str(r.get("game_date_utc") or ""))
+        base = dict(ordered[0])
+
+        game_lines = []
+        seen = set()
+        for r in ordered:
+            disp = str(r.get("game_display") or "").strip()
+            if disp and disp not in seen:
+                seen.add(disp)
+                game_lines.append(disp)
+
+        if game_lines:
+            base["game_display"] = "\n".join(game_lines)
+
+        pitcher_lines = []
+        for r in ordered:
+            p = str(r.get("opposing_probable_pitcher") or "").strip()
+            pitcher_lines.append(p)
+        if pitcher_lines:
+            base["opposing_probable_pitcher"] = "\n".join(pitcher_lines)
+
+        base["game_count"] = len(game_lines) if game_lines else len(group)
+        base["is_doubleheader"] = base["game_count"] > 1
+        base["game_started"] = any(bool(r.get("game_started")) for r in group)
+
+        statuses = [str(r.get("lineup_status") or "") for r in group]
+        if statuses:
+            base["lineup_status"] = max(statuses, key=lambda s: lineup_priority.get(s, 0))
+
+        if any(str(r.get("game_status") or "") == "GAME_FOUND" for r in group):
+            base["game_status"] = "GAME_FOUND"
+
+        # keep player/day components once; combine game-context by mean
+        baseline_points = _mean_component(group, "baseline_points")
+        recent_form_points = _mean_component(group, "recent_form_points")
+        lineup_points = min(float(r.get("lineup_points") or 0.0) for r in group) if group else 0.0
+
+        pitcher_points = _mean_component(group, "pitcher_points")
+        handedness_points = _mean_component(group, "handedness_points")
+        home_away_points = _mean_component(group, "home_away_points")
+        day_night_points = _mean_component(group, "day_night_points")
+
+        raw = 50.0 + baseline_points + pitcher_points + handedness_points + home_away_points + day_night_points + recent_form_points + lineup_points
+        raw = max(MIN_RANKING, min(MAX_RANKING, raw))
+        ranking = int(round(raw))
+
+        base["baseline_points"] = round(baseline_points, 2)
+        base["pitcher_points"] = round(pitcher_points, 2)
+        base["handedness_points"] = round(handedness_points, 2)
+        base["home_away_points"] = round(home_away_points, 2)
+        base["day_night_points"] = round(day_night_points, 2)
+        base["recent_form_points"] = round(recent_form_points, 2)
+        base["lineup_points"] = round(lineup_points, 2)
+        base["ranking"] = ranking
+        base["ranking_band"] = ranking_band(raw)
+        base["start_worthy"] = raw >= START_WORTHY_THRESHOLD
+
+        if base["is_doubleheader"]:
+            base["note_short"] = "Doubleheader"
+
+        collapsed.append(base)
+
+    return collapsed
+
+
 def _format_game_time_et(game_date_utc: str) -> str:
     text = (game_date_utc or "").strip()
     if not text:
@@ -464,6 +562,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         score = compute_usual_suspects_batter_ranking(r)
         r.update(score)
 
+    rows = _collapse_scored_player_day_rows(rows)
     rows.sort(key=lambda r: (r["_slot_sort"], r["player_name"]))
     return rows
 
@@ -674,17 +773,6 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         r.update(score)
         r["comparison_delta"] = ""
 
+    rows = _collapse_scored_player_day_rows(rows)
     rows.sort(key=lambda r: (-int(r.get("ranking", 0)), str(r.get("player_name", ""))))
-
-    deduped = []
-    seen_keys = set()
-    for r in rows:
-        key = str(r.get("yahoo_player_key", "")).strip()
-        if not key:
-            key = f"{normalize_name(r.get('player_name', ''))}|{str(r.get('mlb_team_abbr', '')).strip().upper()}"
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        deduped.append(r)
-
-    return deduped
+    return rows

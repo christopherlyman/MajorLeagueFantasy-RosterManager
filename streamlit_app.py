@@ -55,6 +55,43 @@ UNAVAILABLE_PREFIXES = ("IL", "NA")
 SUFFIXES = {"JR", "JR.", "SR", "SR.", "II", "III", "IV", "V"}
 
 
+BASE_START_THRESHOLD = 50.0
+SLOT_MIN_RANKING_OVERRIDES: dict[str, float] = {}
+
+TEAM_NAME_TO_ABBR = {
+    "ARIZONA DIAMONDBACKS": "AZ",
+    "ATHLETICS": "ATH",
+    "ATLANTA BRAVES": "ATL",
+    "BALTIMORE ORIOLES": "BAL",
+    "BOSTON RED SOX": "BOS",
+    "CHICAGO CUBS": "CHC",
+    "CHICAGO WHITE SOX": "CWS",
+    "CINCINNATI REDS": "CIN",
+    "CLEVELAND GUARDIANS": "CLE",
+    "COLORADO ROCKIES": "COL",
+    "DETROIT TIGERS": "DET",
+    "HOUSTON ASTROS": "HOU",
+    "KANSAS CITY ROYALS": "KC",
+    "LOS ANGELES ANGELS": "LAA",
+    "LOS ANGELES DODGERS": "LAD",
+    "MIAMI MARLINS": "MIA",
+    "MILWAUKEE BREWERS": "MIL",
+    "MINNESOTA TWINS": "MIN",
+    "NEW YORK METS": "NYM",
+    "NEW YORK YANKEES": "NYY",
+    "PHILADELPHIA PHILLIES": "PHI",
+    "PITTSBURGH PIRATES": "PIT",
+    "SAN DIEGO PADRES": "SD",
+    "SAN FRANCISCO GIANTS": "SF",
+    "SEATTLE MARINERS": "SEA",
+    "ST. LOUIS CARDINALS": "STL",
+    "TAMPA BAY RAYS": "TB",
+    "TEXAS RANGERS": "TEX",
+    "TORONTO BLUE JAYS": "TOR",
+    "WASHINGTON NATIONALS": "WSH",
+}
+
+
 def is_unavailable(row: dict) -> bool:
     status = str(row.get("status_display") or "").strip().upper()
     return any(status.startswith(prefix) for prefix in UNAVAILABLE_PREFIXES)
@@ -92,8 +129,28 @@ def eligible_for_slot(row: dict, slot_type: str) -> bool:
     return slot_type in elig
 
 
-def candidate_rows_for_slot(rows: list[dict], slot_type: str) -> list[dict]:
-    out = [r for r in rows if eligible_for_slot(r, slot_type)]
+def has_game_today(row: dict) -> bool:
+    return str(row.get("game_status") or "").strip().upper() == "GAME_FOUND"
+
+
+def slot_min_ranking(slot_id: str, slot_type: str) -> float:
+    return float(SLOT_MIN_RANKING_OVERRIDES.get(slot_id, SLOT_MIN_RANKING_OVERRIDES.get(slot_type, BASE_START_THRESHOLD)))
+
+
+def startable_for_slot(row: dict, slot_id: str, slot_type: str) -> bool:
+    if not eligible_for_slot(row, slot_type):
+        return False
+    if not has_game_today(row):
+        return False
+    try:
+        ranking = float(row.get("ranking") or 0.0)
+    except Exception:
+        ranking = 0.0
+    return ranking >= slot_min_ranking(slot_id, slot_type)
+
+
+def candidate_rows_for_slot(rows: list[dict], slot_id: str, slot_type: str) -> list[dict]:
+    out = [r for r in rows if startable_for_slot(r, slot_id, slot_type)]
     out.sort(key=lambda r: (-int(r.get("ranking", 0)), str(r.get("player_display", ""))))
     return out
 
@@ -139,14 +196,35 @@ def compress_rank_reason(text: str) -> str:
         s = s.replace(old, new)
     return s
 
+def _short_game_line(line: str) -> str:
+    s = str(line or "").strip()
+    if not s:
+        return s
+    s = s.replace(" ET", "")
+    for full_name, abbr in TEAM_NAME_TO_ABBR.items():
+        s = s.replace(f"@ {full_name.title()}", f"@ {abbr}")
+        s = s.replace(f"vs {full_name.title()}", f"vs {abbr}")
+    s = s.replace(" — ", " ")
+    return s
+
+
 def game_with_pitcher(row: dict) -> str:
     base = str(row.get("game_display") or "").strip()
     if not base or base in {"No game today", "Game data missing"}:
         return base
-    pitcher = last_name(str(row.get("opposing_probable_pitcher") or ""))
-    if pitcher:
-        return f"{base} | SP: {pitcher}"
-    return base
+
+    base_lines = [_short_game_line(x) for x in base.splitlines() if str(x).strip()]
+    raw_pitchers = str(row.get("opposing_probable_pitcher") or "").strip()
+    pitcher_lines = [last_name(x) for x in raw_pitchers.splitlines() if str(x).strip()]
+
+    if not pitcher_lines:
+        return " | ".join(base_lines)
+
+    out = []
+    for i, line in enumerate(base_lines):
+        pitcher = pitcher_lines[i] if i < len(pitcher_lines) else pitcher_lines[-1]
+        out.append(f"{line} - SP: {pitcher}" if pitcher else line)
+    return " | ".join(out)
 
 
 def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None]) -> dict[str, dict | None]:
@@ -158,7 +236,7 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
     for slot_pos, (slot_id, slot_type) in enumerate(SLOT_ORDER):
         eligible_idxs = [
             i for i, row in enumerate(players)
-            if eligible_for_slot(row, slot_type)
+            if startable_for_slot(row, slot_id, slot_type)
         ]
         slot_candidates.append(eligible_idxs)
 
@@ -233,6 +311,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
         chosen = assignment.get(slot_id)
         out.append(
             {
+                "Section": "Starter",
                 "Slot": slot_label(slot_id, slot_type),
                 "Player": chosen.get("player_display", "") if chosen else "",
                 "Rank": chosen.get("ranking", "") if chosen else "",
@@ -248,7 +327,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
 
 def build_slot_table(slot_id: str, slot_type: str, rows: list[dict], selected_name: str | None) -> list[dict]:
     out = []
-    for r in candidate_rows_for_slot(rows, slot_type):
+    for r in candidate_rows_for_slot(rows, slot_id, slot_type):
         out.append(
             {
                 "Selected": "✅" if make_player_key(r) == selected_name else "",
@@ -269,10 +348,14 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
     out = []
     for r in all_rows:
         if make_player_key(r) not in chosen_names:
+            current_slot = str(r.get("slot_display", "") or "").upper()
+            display_slot = current_slot if current_slot in {"IL", "NA"} else "BN"
+            section = "🟨 IL" if display_slot == "IL" else ("🟪 NA" if display_slot == "NA" else "🟦 Bench")
             out.append(
                 {
+                    "Section": section,
                     "Player": r.get("player_display", ""),
-                    "Current Slot": r.get("slot_display", ""),
+                    "Slot": display_slot,
                     "Rank": r.get("ranking", ""),
                     "Band": r.get("ranking_band", ""),
                     "Game": game_with_pitcher(r),
@@ -281,6 +364,8 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
                     "Rank Reason": compress_rank_reason(r.get("note_short", "")),
                 }
             )
+    order = {"BN": 0, "IL": 1, "NA": 2}
+    out.sort(key=lambda r: (order.get(str(r.get("Slot") or ""), 99), str(r.get("Player") or "")))
     return out
 
 
@@ -423,7 +508,7 @@ with st.sidebar:
     st.write("Leave on AUTO to keep the optimized default lineup.")
     manual_choices: dict[str, str | None] = {}
     for slot_id, slot_type in SLOT_ORDER:
-        candidates = candidate_rows_for_slot(active_rows, slot_type)
+        candidates = candidate_rows_for_slot(active_rows, slot_id, slot_type)
         options = ["AUTO"] + [make_player_key(r) for r in candidates]
         current = st.session_state.get(f"override_{slot_id}", "AUTO")
         if current not in options:
@@ -441,6 +526,7 @@ with st.sidebar:
 assignment = optimize_lineup(active_rows, manual_choices)
 starting_lineup_rows = build_starting_lineup_table(assignment)
 bench_rows = build_bench_table(rows, assignment)
+combined_roster_rows = starting_lineup_rows + bench_rows
 
 tab_lineup, tab_slots, tab_fa, tab_pitchers = st.tabs(
     ["Starting Lineup", "Slots", "Batter Free Agents", "Pitchers"]
@@ -449,9 +535,14 @@ tab_lineup, tab_slots, tab_fa, tab_pitchers = st.tabs(
 with tab_lineup:
     total_score = sum(int(r["ranking"]) for r in assignment.values() if r)
     st.subheader(f"Optimized starting lineup score: {total_score}")
-    st.dataframe(starting_lineup_rows, use_container_width=True, hide_index=True)
-    st.subheader("Bench / Unassigned")
-    st.dataframe(bench_rows, use_container_width=True, hide_index=True)
+    st.caption("All game times Eastern.")
+    roster_table_height = max(420, 35 * (len(combined_roster_rows) + 1) + 3)
+    st.dataframe(
+        combined_roster_rows,
+        width="stretch",
+        height=roster_table_height,
+        hide_index=True,
+    )
 
 with tab_slots:
     for slot_id, slot_type in SLOT_ORDER:

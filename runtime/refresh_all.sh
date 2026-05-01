@@ -114,7 +114,7 @@ if [[ "$MODE" == "full" || "$MODE" == "deep" ]]; then
     PLAYER_POOL_MODE="full"
   fi
 
-  docker exec -i mlf_draftboard bash -lc "
+  docker exec -i mlf_roster_manager bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_LEAGUE_KEY=$LEAGUE_KEY \
 SEASON_YEAR=${TODAY:0:4} \
