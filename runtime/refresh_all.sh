@@ -194,6 +194,7 @@ WITH fa_base AS (
       )
 )
 SELECT
+    yahoo_player_key,
     full_name,
     editorial_team_abbr
 FROM fa_base
