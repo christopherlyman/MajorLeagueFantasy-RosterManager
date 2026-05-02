@@ -1,12 +1,16 @@
 import csv
 import json
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
 
+sys.path.insert(0, "/app")
+
 from auth import get_access_token
+from services.db import get_connection
 
 STAT_ID_HAB = "60"   # H/AB, e.g. "1/4"
 STAT_ID_R = "7"
@@ -16,8 +20,107 @@ STAT_ID_SB = "16"
 STAT_ID_K = "21"
 STAT_ID_AVG = "3"
 
-RAW_DIR = Path("data/raw/yahoo")
-DERIVED_DIR = Path("data/derived")
+RAW_DIR = Path("/app/data/raw/yahoo")
+DERIVED_DIR = Path("/app/data/derived")
+
+
+def _safe_avg_num(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _stat_map_to_cache_row(stat_map: dict):
+    hits, ab = parse_hab(stat_map.get(STAT_ID_HAB, ""))
+    return {
+        "hits": hits,
+        "ab": ab,
+        "r": to_int(stat_map.get(STAT_ID_R, 0)),
+        "hr": to_int(stat_map.get(STAT_ID_HR, 0)),
+        "rbi": to_int(stat_map.get(STAT_ID_RBI, 0)),
+        "sb": to_int(stat_map.get(STAT_ID_SB, 0)),
+        "k": to_int(stat_map.get(STAT_ID_K, 0)),
+        "avg": _safe_avg_num(stat_map.get(STAT_ID_AVG, "")),
+    }
+
+
+def _cache_row_to_stat_map(row):
+    if row is None:
+        return None
+
+    hits, ab, r, hr, rbi, sb, k, avg = row
+    hab = f"{hits}/{ab}" if hits or ab else ""
+    avg_text = "" if avg is None else f"{float(avg):.3f}"
+
+    return {
+        STAT_ID_HAB: hab,
+        STAT_ID_R: str(r or 0),
+        STAT_ID_HR: str(hr or 0),
+        STAT_ID_RBI: str(rbi or 0),
+        STAT_ID_SB: str(sb or 0),
+        STAT_ID_K: str(k or 0),
+        STAT_ID_AVG: avg_text,
+    }
+
+
+def _get_cached_daily_stats(player_key: str, stat_date: str):
+    sql = """
+    SELECT hits, ab, r, hr, rbi, sb, k, avg
+    FROM rmt.yahoo_batter_daily_stat_cache
+    WHERE yahoo_player_key = %s
+      AND stat_date = %s
+      AND fetch_status = 'success'
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (player_key, stat_date))
+            row = cur.fetchone()
+    return _cache_row_to_stat_map(row)
+
+
+def _put_cached_daily_stats(player_key: str, stat_date: str, stat_map: dict):
+    row = _stat_map_to_cache_row(stat_map)
+    sql = """
+    INSERT INTO rmt.yahoo_batter_daily_stat_cache (
+        yahoo_player_key, stat_date, hits, ab, r, hr, rbi, sb, k, avg, fetch_status, response_excerpt
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'success', NULL)
+    ON CONFLICT (yahoo_player_key, stat_date)
+    DO UPDATE SET
+        hits = EXCLUDED.hits,
+        ab = EXCLUDED.ab,
+        r = EXCLUDED.r,
+        hr = EXCLUDED.hr,
+        rbi = EXCLUDED.rbi,
+        sb = EXCLUDED.sb,
+        k = EXCLUDED.k,
+        avg = EXCLUDED.avg,
+        fetch_status = EXCLUDED.fetch_status,
+        response_excerpt = EXCLUDED.response_excerpt,
+        fetched_at_utc = now()
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    player_key,
+                    stat_date,
+                    row["hits"],
+                    row["ab"],
+                    row["r"],
+                    row["hr"],
+                    row["rbi"],
+                    row["sb"],
+                    row["k"],
+                    row["avg"],
+                ),
+            )
+        conn.commit()
 
 
 def walk(obj):
@@ -85,6 +188,10 @@ def load_batters_from_players_csv(src_path: str):
 
 
 def get_player_daily_stats(session: requests.Session, headers: dict, player_key: str, stat_date: str):
+    cached = _get_cached_daily_stats(player_key, stat_date)
+    if cached is not None:
+        return cached
+
     url = (
         f"https://fantasysports.yahooapis.com/fantasy/v2/"
         f"player/{player_key}/stats;type=date;date={stat_date}?format=json"
@@ -120,6 +227,7 @@ def get_player_daily_stats(session: requests.Session, headers: dict, player_key:
             if stat_id:
                 stat_map[stat_id] = value
 
+    _put_cached_daily_stats(player_key, stat_date, stat_map)
     return stat_map
 
 
