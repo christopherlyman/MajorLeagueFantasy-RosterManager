@@ -776,3 +776,68 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
     rows = _collapse_scored_player_day_rows(rows)
     rows.sort(key=lambda r: (-int(r.get("ranking", 0)), str(r.get("player_name", ""))))
     return rows
+
+def fetch_remaining_starts_by_slot(league_key: str, team_key: str, as_of_date: str) -> dict[str, int]:
+    season_year = int(str(as_of_date)[:4])
+
+    sql = """
+    WITH seed AS (
+        SELECT
+            slot_family,
+            max_games,
+            seed_played,
+            seed_as_of_date
+        FROM lineup_tool.slot_usage_seed
+        WHERE league_key = %s
+          AND team_key = %s
+          AND season_year = %s
+    ),
+    usage_since_seed AS (
+        SELECT
+            CASE
+                WHEN rs.selected_position = 'Util' THEN 'UTIL'
+                ELSE UPPER(rs.selected_position)
+            END AS slot_family,
+            COUNT(DISTINCT (rs.as_of_date, rs.yahoo_player_key, rs.selected_position))::integer AS played_since_seed
+        FROM lineup_tool.roster_snapshot rs
+        JOIN seed s
+          ON s.slot_family = CASE
+                                WHEN rs.selected_position = 'Util' THEN 'UTIL'
+                                ELSE UPPER(rs.selected_position)
+                             END
+        WHERE rs.league_key = %s
+          AND rs.team_key = %s
+          AND rs.position_type = 'B'
+          AND rs.selected_position IN ('C','1B','2B','3B','SS','IF','OF','Util')
+          AND rs.as_of_date >= s.seed_as_of_date
+          AND rs.as_of_date < %s::date
+        GROUP BY 1
+    )
+    SELECT
+        s.slot_family,
+        GREATEST(
+            0,
+            s.max_games - (s.seed_played + COALESCE(u.played_since_seed, 0))
+        )::integer AS remaining_starts
+    FROM seed s
+    LEFT JOIN usage_since_seed u
+      ON u.slot_family = s.slot_family
+    ORDER BY s.slot_family
+    """
+
+    out: dict[str, int] = {}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    league_key, team_key, season_year,
+                    league_key, team_key, as_of_date,
+                ),
+            )
+            rows = cur.fetchall()
+
+    for slot_family, remaining_starts in rows:
+        out[str(slot_family).upper()] = int(remaining_starts)
+
+    return out
