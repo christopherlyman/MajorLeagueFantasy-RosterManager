@@ -2,7 +2,7 @@ import csv
 import importlib.util
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -46,10 +46,24 @@ def _today_ny() -> str:
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
+def resolve_as_of_date(explicit_date: str | None = None, offset_days: str | int | None = None) -> str:
+    explicit = str(explicit_date or "").strip()
+    if explicit:
+        return explicit
+
+    try:
+        offset = int(str(offset_days or "0").strip() or "0")
+    except ValueError:
+        offset = 0
+
+    return (datetime.now(ZoneInfo("America/New_York")).date() + timedelta(days=offset)).isoformat()
+
+
 def get_default_context():
-    as_of_date = (os.environ.get("DEFAULT_AS_OF_DATE") or "").strip()
-    if not as_of_date:
-        as_of_date = _today_ny()
+    as_of_date = resolve_as_of_date(
+        os.environ.get("DEFAULT_AS_OF_DATE"),
+        os.environ.get("DEFAULT_DATE_OFFSET_DAYS"),
+    )
 
     return {
         "league_key": os.environ.get("DEFAULT_LEAGUE_KEY", ""),

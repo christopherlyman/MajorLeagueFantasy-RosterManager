@@ -1,9 +1,10 @@
-from dash import html
+import streamlit as st
 
-layout = html.Div(
-    [
-        html.H3("Pitchers"),
-        html.Div("Left: roster | Middle: today's pitchers | Right: top available pitchers"),
-    ],
-    style={"padding": "12px"},
+st.set_page_config(page_title="MLF Roster Manager - Pitchers", layout="wide")
+
+st.title("Pitchers")
+
+st.info(
+    "Pitcher UI is the next phase. "
+    "This page will hold pitcher roster, daily pitcher decisions, and pitcher free-agent workflow."
 )
