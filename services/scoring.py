@@ -53,6 +53,9 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+DTD_STATUS_PENALTY = -3.0
+
+
 def _status_override(status: str) -> float | None:
     s = (status or "").strip().upper()
     if s == "NA":
@@ -64,7 +67,7 @@ def _status_override(status: str) -> float | None:
 
 def _game_override(game_status: str) -> float | None:
     gs = (game_status or "").strip().upper()
-    if gs == "NO_GAME_TODAY":
+    if gs in {"NO_GAME_TODAY", "POSTPONED"}:
         return 0.0
     return None
 
@@ -306,6 +309,13 @@ def compute_recent_form_points(row: Mapping[str, Any]) -> float:
     return round(_clamp(points, -RECENT_FORM_MAX_POINTS, RECENT_FORM_MAX_POINTS), 2)
 
 
+def compute_status_risk_points(row: Mapping[str, Any]) -> float:
+    status = str(row.get("status_display") or row.get("status") or "").strip().upper()
+    if status == "DTD":
+        return DTD_STATUS_PENALTY
+    return 0.0
+
+
 def compute_lineup_points(row: Mapping[str, Any]) -> float:
     lineup_status = str(row.get("lineup_status") or "").strip().upper()
     if lineup_status == "POSTED_BUT_NOT_FOUND":
@@ -345,7 +355,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
             "day_night_points": 0.0,
             "recent_form_points": 0.0,
             "lineup_points": 0.0,
-            "note_short": "No game today",
+            "note_short": "Postponed" if str(row.get("game_status") or "").strip().upper() == "POSTPONED" else "No game today",
         }
 
     baseline_points = compute_baseline_points(row)
@@ -354,6 +364,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
     home_away_points = compute_home_away_points(row)
     day_night_points = compute_day_night_points(row)
     recent_form_points = compute_recent_form_points(row)
+    status_risk_points = compute_status_risk_points(row)
     lineup_points = compute_lineup_points(row)
 
     ranking = _clamp(
@@ -364,6 +375,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         + home_away_points
         + day_night_points
         + recent_form_points
+        + status_risk_points
         + lineup_points,
         MIN_RANKING,
         MAX_RANKING,
@@ -376,6 +388,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         f"Home/Away {home_away_points:+.1f}",
         f"Day/Night {day_night_points:+.1f}",
         f"Recent {recent_form_points:+.1f}",
+        f"Status {status_risk_points:+.1f}",
         f"Lineup {lineup_points:+.1f}",
     ]
     if str(row.get("game_status") or "").strip().upper() == "GAME_DATA_MISSING":
@@ -393,6 +406,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         "home_away_points": home_away_points,
         "day_night_points": day_night_points,
         "recent_form_points": recent_form_points,
+        "status_risk_points": status_risk_points,
         "lineup_points": lineup_points,
         "note_short": " | ".join(note_parts),
     }

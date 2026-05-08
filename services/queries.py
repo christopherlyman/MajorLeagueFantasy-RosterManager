@@ -152,6 +152,40 @@ def _status_display(status):
     return s if s else "Active"
 
 
+def _mlb_game_status_from_raw_json(raw_json):
+    if not isinstance(raw_json, dict):
+        return "GAME_FOUND"
+
+    status = raw_json.get("status") or {}
+    if not isinstance(status, dict):
+        return "GAME_FOUND"
+
+    detailed = str(status.get("detailedState") or "").strip().upper()
+    status_code = str(status.get("statusCode") or "").strip().upper()
+
+    if detailed == "POSTPONED" or status_code == "DI":
+        return "POSTPONED"
+
+    return "GAME_FOUND"
+
+
+def _mlb_game_display_override(raw_json):
+    if not isinstance(raw_json, dict):
+        return ""
+
+    status = raw_json.get("status") or {}
+    if not isinstance(status, dict):
+        return ""
+
+    detailed = str(status.get("detailedState") or "").strip()
+    reason = str(status.get("reason") or "").strip()
+
+    if detailed.lower() == "postponed":
+        return f"Postponed — {reason}" if reason else "Postponed"
+
+    return ""
+
+
 def _player_display(player_name, mlb_team_abbr):
     team = (mlb_team_abbr or "").strip()
     return f"{player_name} ({team})" if team else player_name
@@ -335,12 +369,18 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
         if statuses:
             base["lineup_status"] = max(statuses, key=lambda s: lineup_priority.get(s, 0))
 
-        if any(str(r.get("game_status") or "") == "GAME_FOUND" for r in group):
+        game_statuses = [str(r.get("game_status") or "").strip().upper() for r in group]
+        if any(s == "GAME_FOUND" for s in game_statuses):
             base["game_status"] = "GAME_FOUND"
+        elif any(s == "POSTPONED" for s in game_statuses):
+            base["game_status"] = "POSTPONED"
+        elif any(s == "NO_GAME_TODAY" for s in game_statuses):
+            base["game_status"] = "NO_GAME_TODAY"
 
         # keep player/day components once; combine game-context by mean
         baseline_points = _mean_component(group, "baseline_points")
         recent_form_points = _mean_component(group, "recent_form_points")
+        status_risk_points = _mean_component(group, "status_risk_points")
         lineup_points = min(float(r.get("lineup_points") or 0.0) for r in group) if group else 0.0
 
         pitcher_points = _mean_component(group, "pitcher_points")
@@ -348,9 +388,31 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
         home_away_points = _mean_component(group, "home_away_points")
         day_night_points = _mean_component(group, "day_night_points")
 
-        raw = 50.0 + baseline_points + pitcher_points + handedness_points + home_away_points + day_night_points + recent_form_points + lineup_points
-        raw = max(MIN_RANKING, min(MAX_RANKING, raw))
-        ranking = int(round(raw))
+        status_text = str(base.get("status_display") or base.get("status") or "").strip().upper()
+        game_status = str(base.get("game_status") or "").strip().upper()
+        force_unavailable = (
+            status_text == "NA"
+            or status_text.startswith("IL")
+            or game_status in {"NO_GAME_TODAY", "POSTPONED"}
+        )
+
+        if force_unavailable:
+            raw = 0.0
+            ranking = 0
+        else:
+            raw = (
+                50.0
+                + baseline_points
+                + pitcher_points
+                + handedness_points
+                + home_away_points
+                + day_night_points
+                + recent_form_points
+                + status_risk_points
+                + lineup_points
+            )
+            raw = max(MIN_RANKING, min(MAX_RANKING, raw))
+            ranking = int(round(raw))
 
         base["baseline_points"] = round(baseline_points, 2)
         base["pitcher_points"] = round(pitcher_points, 2)
@@ -358,12 +420,20 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
         base["home_away_points"] = round(home_away_points, 2)
         base["day_night_points"] = round(day_night_points, 2)
         base["recent_form_points"] = round(recent_form_points, 2)
+        base["status_risk_points"] = round(status_risk_points, 2)
         base["lineup_points"] = round(lineup_points, 2)
         base["ranking"] = ranking
         base["ranking_band"] = ranking_band(raw)
         base["start_worthy"] = raw >= START_WORTHY_THRESHOLD
 
-        if base["is_doubleheader"]:
+        if force_unavailable:
+            if game_status == "POSTPONED":
+                base["note_short"] = "Postponed"
+            elif game_status == "NO_GAME_TODAY":
+                base["note_short"] = "No game today"
+            else:
+                base["note_short"] = "Unavailable"
+        elif base["is_doubleheader"]:
             base["note_short"] = "Doubleheader"
 
         collapsed.append(base)
@@ -465,7 +535,8 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
                 THEN TRUE
             ELSE NULL
         END AS is_home,
-        COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc
+        COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc,
+        g.raw_json AS raw_json
     FROM lineup_tool.roster_snapshot r
     LEFT JOIN games g
       ON g.raw_json->'teams'->'away'->'team'->>'abbreviation' = r.mlb_team_abbr
@@ -509,11 +580,11 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
             r["game_display"] = "Game data missing"
             r["game_started"] = False
         elif r.get("opponent_team") or r.get("game_date_utc"):
-            r["game_status"] = "GAME_FOUND"
+            r["game_status"] = _mlb_game_status_from_raw_json(r.get("raw_json"))
             r["game_time_et"] = _format_game_time_et(r.get("game_date_utc", ""))
             r["game_daypart"] = _game_daypart_et(r.get("game_date_utc", ""))
             r["game_started"] = _game_started_et(r.get("game_date_utc", ""))
-            r["game_display"] = _game_display(r.get("opponent_team", ""), r.get("is_home"), r["game_time_et"])
+            r["game_display"] = _mlb_game_display_override(r.get("raw_json")) or _game_display(r.get("opponent_team", ""), r.get("is_home"), r["game_time_et"])
         else:
             r["game_status"] = "NO_GAME_TODAY"
             r["game_display"] = "No game today"
@@ -644,7 +715,8 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
                 THEN TRUE
             ELSE NULL
         END AS is_home,
-        COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc
+        COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc,
+        g.raw_json AS raw_json
     FROM public.yahoo_league_player_pool p
     LEFT JOIN games g
       ON g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
@@ -660,6 +732,10 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
         OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
         OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
+      )
+      AND NOT (
+        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'IL'
+        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'NA'
       )
     ORDER BY
       COALESCE(p.rank_value, 999999),
@@ -719,11 +795,11 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
             r["game_display"] = "Game data missing"
             r["game_started"] = False
         elif r.get("opponent_team") or r.get("game_date_utc"):
-            r["game_status"] = "GAME_FOUND"
+            r["game_status"] = _mlb_game_status_from_raw_json(r.get("raw_json"))
             r["game_time_et"] = _format_game_time_et(r.get("game_date_utc", ""))
             r["game_daypart"] = _game_daypart_et(r.get("game_date_utc", ""))
             r["game_started"] = _game_started_et(r.get("game_date_utc", ""))
-            r["game_display"] = _game_display(r.get("opponent_team", ""), r.get("is_home"), r["game_time_et"])
+            r["game_display"] = _mlb_game_display_override(r.get("raw_json")) or _game_display(r.get("opponent_team", ""), r.get("is_home"), r["game_time_et"])
         else:
             r["game_status"] = "NO_GAME_TODAY"
             r["game_display"] = "No game today"

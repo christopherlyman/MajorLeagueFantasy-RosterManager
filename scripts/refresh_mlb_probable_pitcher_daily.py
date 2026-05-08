@@ -61,6 +61,7 @@ def main():
             raw_obj = {
                 "gamePk": game.get("gamePk"),
                 "gameDate": game.get("gameDate", ""),
+                "status": game.get("status", {}) or {},
                 "teams": {
                     "away": {
                         "team": {

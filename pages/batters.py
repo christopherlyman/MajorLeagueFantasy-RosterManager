@@ -571,6 +571,7 @@ def compress_rank_reason(text: str) -> str:
         ("Home/Away ", "H/A: "),
         ("Day/Night ", "D/N: "),
         ("Recent ", "R: "),
+        ("Status ", "S: "),
         ("Lineup ", "L: "),
     ]
     for old, new in replacements:
@@ -1067,4 +1068,4 @@ with tab_fa:
         st.dataframe(fa_rows, use_container_width=True, hide_index=True)
 
 st.divider()
-st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | L=Lineup")
+st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | S=Status | L=Lineup")
