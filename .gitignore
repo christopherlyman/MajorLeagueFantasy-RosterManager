@@ -33,3 +33,6 @@ data/derived/
 
 # Local env
 .env
+
+# Generated Yahoo probe/script data
+scripts/yahoo/data/
