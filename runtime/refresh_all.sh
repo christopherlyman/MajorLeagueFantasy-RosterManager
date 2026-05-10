@@ -158,126 +158,248 @@ cd /app && python scripts/refresh_hitter_splits_mlb.py \
   --out /app/data/derived/hitter_split_inputs_${TODAY}.csv
 "
 
-docker exec -i mlf_roster_manager bash -lc "
-cd /app && python - << 'PYFA'
+docker exec -i \
+  -e RMT_FA_AS_OF_DATE="${TODAY}" \
+  -e RMT_FA_LEAGUE_KEY="${LEAGUE_KEY}" \
+  -e RMT_FA_MODE="${MODE}" \
+  -e RMT_FA_OUT="/app/data/derived/true_free_agent_batters_${TODAY}.csv" \
+  mlf_roster_manager bash -lc 'cd /app && PYTHONPATH=/app python - << "PYFA"
 import csv
+import os
+import sys
 from pathlib import Path
+
+import requests
+
+sys.path.insert(0, "/app/scripts/yahoo")
+from auth import get_access_token
+
 from services.db import get_connection
 
-as_of_date = '${TODAY}'
-league_key = '${LEAGUE_KEY}'
+YAHOO_FANTASY_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
+PITCHER_POSITIONS = {"P", "SP", "RP"}
+UNAVAILABLE_POSITIONS = {"IL", "NA"}
+UNAVAILABLE_STATUSES = {"IL", "IL10", "IL15", "IL60", "NA", "SUSP"}
+
+as_of_date = os.environ["RMT_FA_AS_OF_DATE"]
+league_key = os.environ["RMT_FA_LEAGUE_KEY"]
+mode = os.environ["RMT_FA_MODE"]
 season_year = int(as_of_date[:4])
-mode = '${MODE}'
-out = Path('/app/data/derived/true_free_agent_batters_${TODAY}.csv')
+out = Path(os.environ["RMT_FA_OUT"])
 
-sql_all = '''
-WITH fa_base AS (
-    SELECT
-        p.full_name,
-        p.editorial_team_abbr,
-        p.yahoo_player_key,
-        p.eligible_positions,
-        p.rank_value,
-        p.percent_owned
-    FROM public.yahoo_league_player_pool p
-    LEFT JOIN lineup_tool.roster_snapshot r
-      ON r.league_key = p.league_key
-     AND r.as_of_date = %s
-     AND r.yahoo_player_key = p.yahoo_player_key
-    WHERE p.league_key = %s
-      AND p.season_year = %s
-      AND r.yahoo_player_key IS NULL
-      AND NOT (
-        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
-      )
-)
-SELECT
-    yahoo_player_key,
-    full_name,
-    editorial_team_abbr
-FROM fa_base
-ORDER BY
-  COALESCE(rank_value, 999999),
-  COALESCE(percent_owned, -1) DESC,
-  full_name
-'''
 
-sql_daily = '''
-WITH game_teams AS (
-    SELECT DISTINCT raw_json->'teams'->'away'->'team'->>'abbreviation' AS team_abbr
-    FROM lineup_tool.mlb_probable_pitcher_daily
-    WHERE as_of_date = %s
-    UNION
-    SELECT DISTINCT raw_json->'teams'->'home'->'team'->>'abbreviation' AS team_abbr
-    FROM lineup_tool.mlb_probable_pitcher_daily
-    WHERE as_of_date = %s
-),
-fa_base AS (
-    SELECT
-        p.yahoo_player_key,
-        p.full_name,
-        p.editorial_team_abbr,
-        p.rank_value,
-        p.percent_owned
-    FROM public.yahoo_league_player_pool p
-    JOIN game_teams gt
-      ON gt.team_abbr = p.editorial_team_abbr
-    LEFT JOIN lineup_tool.roster_snapshot r
-      ON r.league_key = p.league_key
-     AND r.as_of_date = %s
-     AND r.yahoo_player_key = p.yahoo_player_key
-    WHERE p.league_key = %s
-      AND p.season_year = %s
-      AND r.yahoo_player_key IS NULL
-      AND NOT (
-        COALESCE(p.eligible_positions, '[]'::jsonb) ? 'P'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'SP'
-        OR COALESCE(p.eligible_positions, '[]'::jsonb) ? 'RP'
-      )
-      AND (
-        COALESCE(p.rank_value, 999999) <= 600
-        OR COALESCE(p.percent_owned, -1) >= 1
-      )
-)
-SELECT
-    yahoo_player_key,
-    full_name,
-    editorial_team_abbr
-FROM fa_base
-ORDER BY
-  COALESCE(rank_value, 999999),
-  COALESCE(percent_owned, -1) DESC,
-  full_name
-'''
+def find_first(obj, wanted_key):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == wanted_key:
+                return v
+            found = find_first(v, wanted_key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = find_first(item, wanted_key)
+            if found is not None:
+                return found
+    return None
 
-with get_connection() as conn:
-    with conn.cursor() as cur:
-        if mode == 'daily':
-            cur.execute(sql_daily, (as_of_date, as_of_date, as_of_date, league_key, season_year))
-        else:
-            cur.execute(sql_all, (as_of_date, league_key, season_year))
-        rows = cur.fetchall()
+
+def extract_player_lists(payload):
+    league = payload.get("fantasy_content", {}).get("league", [])
+    if not isinstance(league, list) or len(league) < 2 or not isinstance(league[1], dict):
+        return []
+
+    players = league[1].get("players")
+    if not isinstance(players, dict):
+        return []
+
+    out_rows = []
+    for k, v in players.items():
+        if k == "count":
+            continue
+        if isinstance(v, dict) and isinstance(v.get("player"), list):
+            out_rows.append(v["player"])
+    return out_rows
+
+
+def percent_owned_value(player_list):
+    po = find_first(player_list, "percent_owned")
+    if isinstance(po, list):
+        for item in po:
+            if isinstance(item, dict) and "value" in item:
+                return item["value"]
+    if isinstance(po, dict):
+        return po.get("value")
+    return po
+
+
+def extract_positions(player_list):
+    ep = find_first(player_list, "eligible_positions")
+    out_rows = []
+    if isinstance(ep, list):
+        for item in ep:
+            if isinstance(item, dict) and item.get("position"):
+                out_rows.append(str(item["position"]))
+    return out_rows
+
+
+def clean_status(value):
+    if value is False or value is None:
+        return ""
+    return str(value).strip().upper()
+
+
+def extract_player_row(player_list):
+    name = find_first(player_list, "name")
+    if isinstance(name, dict):
+        full_name = str(name.get("full") or "").strip()
+    else:
+        full_name = str(name or "").strip()
+
+    return {
+        "yahoo_player_key": str(find_first(player_list, "player_key") or "").strip(),
+        "player_name": full_name,
+        "editorial_team_abbr": str(find_first(player_list, "editorial_team_abbr") or "").strip(),
+        "eligible_positions": extract_positions(player_list),
+        "status": find_first(player_list, "status"),
+        "status_full": find_first(player_list, "status_full"),
+        "percent_owned_yahoo": percent_owned_value(player_list),
+    }
+
+
+def fetch_yahoo_free_agents():
+    token = get_access_token()
+    headers = {"Authorization": "Bearer {}".format(token)}
+    rows = []
+
+    for start in range(0, 3000, 25):
+        url = "{}/league/{}/players;status=FA;sort=OR;start={};count=25;out=percent_owned?format=json".format(
+            YAHOO_FANTASY_BASE,
+            league_key,
+            start,
+        )
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise RuntimeError("Yahoo status=FA request failed: HTTP {}: {}".format(resp.status_code, resp.text[:240]))
+
+        player_lists = extract_player_lists(resp.json())
+        if not player_lists:
+            break
+
+        rows.extend(extract_player_row(player_list) for player_list in player_lists)
+
+    seen = set()
+    deduped = []
+    for row in rows:
+        key = row["yahoo_player_key"]
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(row)
+    return deduped
+
+
+def is_batter(row):
+    positions = {p.upper() for p in row.get("eligible_positions", [])}
+    return not bool(positions & PITCHER_POSITIONS)
+
+
+def is_active(row):
+    positions = {p.upper() for p in row.get("eligible_positions", [])}
+    status = clean_status(row.get("status"))
+    status_full = str(row.get("status_full") or "").strip().upper()
+
+    if positions & UNAVAILABLE_POSITIONS:
+        return False
+    if status and status in UNAVAILABLE_STATUSES:
+        return False
+    if status_full:
+        return False
+    return True
+
+
+def load_daily_context():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT raw_json->$$teams$$->$$away$$->$$team$$->>$$abbreviation$$
+                FROM lineup_tool.mlb_probable_pitcher_daily
+                WHERE as_of_date = %s
+                UNION
+                SELECT DISTINCT raw_json->$$teams$$->$$home$$->$$team$$->>$$abbreviation$$
+                FROM lineup_tool.mlb_probable_pitcher_daily
+                WHERE as_of_date = %s
+                """,
+                (as_of_date, as_of_date),
+            )
+            game_teams = {str(r[0]) for r in cur.fetchall() if r[0]}
+
+            cur.execute(
+                """
+                SELECT yahoo_player_key, rank_value, percent_owned
+                FROM public.yahoo_league_player_pool
+                WHERE league_key = %s
+                  AND season_year = %s
+                """,
+                (league_key, season_year),
+            )
+            meta = {str(k): {"rank": rank, "owned": owned} for k, rank, owned in cur.fetchall()}
+
+    return game_teams, meta
+
+
+def rank_owned_ok(row, meta):
+    m = meta.get(row["yahoo_player_key"], {})
+
+    try:
+        rank = float(m.get("rank")) if m.get("rank") is not None else 999999.0
+    except Exception:
+        rank = 999999.0
+
+    try:
+        owned = float(row.get("percent_owned_yahoo")) if row.get("percent_owned_yahoo") is not None else float(m.get("owned") or 0)
+    except Exception:
+        owned = 0.0
+
+    return rank <= 600 and owned > 0
+
+
+yahoo_rows = fetch_yahoo_free_agents()
+batter_rows = [r for r in yahoo_rows if is_batter(r)]
+active_batter_rows = [r for r in batter_rows if is_active(r)]
+
+if mode == "daily":
+    game_teams, meta = load_daily_context()
+    rows = [
+        r for r in active_batter_rows
+        if r["editorial_team_abbr"] in game_teams and rank_owned_ok(r, meta)
+    ]
+else:
+    game_teams, meta = set(), {}
+    rows = active_batter_rows
 
 out.parent.mkdir(parents=True, exist_ok=True)
-with out.open('w', newline='', encoding='utf-8') as f:
-    writer = csv.DictWriter(f, fieldnames=['yahoo_player_key', 'player_name', 'editorial_team_abbr'])
+with out.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["yahoo_player_key", "player_name", "editorial_team_abbr"])
     writer.writeheader()
-    for yahoo_player_key, player_name, editorial_team_abbr in rows:
+    for r in rows:
         writer.writerow({
-            'yahoo_player_key': yahoo_player_key or '',
-            'player_name': player_name,
-            'editorial_team_abbr': editorial_team_abbr or '',
+            "yahoo_player_key": r["yahoo_player_key"],
+            "player_name": r["player_name"],
+            "editorial_team_abbr": r["editorial_team_abbr"],
         })
 
-print(f'WROTE {out}')
-print(f'MODE {mode}')
-print(f'ROWS {len(rows)}')
+print("WROTE {}".format(out))
+print("MODE {}".format(mode))
+print("YAHOO_FA_TOTAL {}".format(len(yahoo_rows)))
+print("FA_BATTERS {}".format(len(batter_rows)))
+print("ACTIVE_FA_BATTERS {}".format(len(active_batter_rows)))
+print("ROWS {}".format(len(rows)))
 for row in rows[:30]:
-    print(f'{row[0]} | {row[1]} | {row[2]}')
-PYFA
-"
+    print("{} | {} | {}".format(row["yahoo_player_key"], row["player_name"], row["editorial_team_abbr"]))
+PYFA'
+
+
 
 docker cp \
   "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv" \
