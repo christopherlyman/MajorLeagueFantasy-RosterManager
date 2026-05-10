@@ -11,6 +11,7 @@ runtime/status/
 .streamlit/secrets.toml
 
 *.bak
+*.bak_*
 
 *.tmp
 # Local artifacts / backups

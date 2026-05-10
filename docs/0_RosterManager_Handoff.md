@@ -6,7 +6,7 @@ Daily roster-management tool for personal fantasy baseball lineup decisions.
 Current scope:
 - **Primary UI:** Streamlit
 - **Primary focus:** batter sit/start decisions, with pitcher workflow next
-- **Current strengths:** roster refresh, game/probable pitcher context, handedness, recent, splits, slot-based optimized lineup UI, Batter Free Agents tab, manual slot overrides, working in-app refresh flow, schedule-pressure slot thresholds, automatic remaining-start tracking from seed + roster snapshots, dynamic New York date resolution, IL/NA Free Agent exclusion, DTD risk penalty, and postponed-game handling
+- **Current strengths:** roster refresh, game/probable pitcher context, handedness, recent, splits, slot-based optimized lineup UI, Yahoo-confirmed Batter Free Agents tab, manual slot overrides, working in-app refresh flow, schedule-pressure slot thresholds, automatic remaining-start tracking from seed + roster snapshots, dynamic New York date resolution, FA/waiver separation, IL/NA/SUSP Free Agent exclusion, DTD risk penalty, and postponed-game handling
 - **Current gaps:** Pitchers workflow is not built; MLBAM disambiguation still weak for some ambiguous names; recent H/AB still needs true last-7 AVG contribution; future-opportunity denominator still assumes team game-days are playable opportunities and needs lineup-reliability weighting
 
 ---
@@ -188,7 +188,13 @@ These are considered working unless proven otherwise:
 - Slot usage tracker is seeded and proven.
 - `fetch_remaining_starts_by_slot(...)` is proven to decrement correctly day over day from snapshots.
 - Batter Free Agents tab is wired and usable.
-- Batter Free Agents exclude Yahoo `IL` and `NA` candidates when those tags appear in `eligible_positions`.
+- Batter Free Agents now use Yahoo-confirmed `status=FA`, sorted by `OR`, paginated in 25-row pages, with `;out=percent_owned`.
+- Batter Free Agents exclude waiver players because `status=W` players are not included in the `status=FA` source.
+- Batter Free Agents exclude Yahoo `IL`, `NA`, and `SUSP` candidates using Yahoo status fields and `eligible_positions`.
+- Batter Free Agents apply the current screen: batter only, active only, MLB team playing today, DB `rank_value <= 600`, Yahoo percent-owned `> 0`.
+- Chase Meidroth proof passed: present in generated CSV/app rows after the source fix.
+- Jose Altuve proof passed: excluded because Yahoo returns him as waiver, not free agent.
+- Luis Campusano proof passed: excluded because Yahoo returns him with `IL10` / `10-Day Injured List`.
 - DTD batters remain eligible but receive a mild status-risk penalty.
 - MLB game status is captured in `scripts/refresh_mlb_probable_pitcher_daily.py`.
 - Postponed games are classified as `POSTPONED`, display the postponement reason when available, use `LINEUP_NOT_APPLICABLE`, and rank as unavailable.
@@ -196,9 +202,12 @@ These are considered working unless proven otherwise:
   - `POSTPONED_OWNED 6`
   - `POSTPONED_FA 16`
   - `BAD_POSTPONED_RANKS []`
-- Current-date FA hardening proof from `2026-05-08`:
-  - `FA_STATUS_COUNTS {'Active': 109}`
-  - `FA_IL_NA_ROWS []`
+- Current-date Yahoo FA discovery proof from `2026-05-10`:
+  - generated CSV rows: `46`
+  - app FA rows: `45`
+  - `HAS_CHASE_MEIDROTH True`
+  - `HAS_JOSE_ALTUVE False`
+  - `HAS_LUIS_CAMPUSANO False`
 
 ---
 
@@ -231,20 +240,45 @@ Operational caution:
 - `POSTED_BUT_NOT_FOUND` should be expected when a player’s team lineup is posted and the player is not in it.
 
 ### 2. Batter Free Agents proof cycle
-Status: **Wired and usable. Optional hardening later.**
+Status: **Wired, usable, and source-corrected.**
 
-What was proven for `2026-05-04`:
-- `fetch_available_batter_rows(...)` returned `106` free-agent batter rows.
-- Status counts:
-  - `Active: 106`
-- Lineup status counts:
-  - `56 IN_POSTED_LINEUP`
-  - `50 POSTED_BUT_NOT_FOUND`
-- Rows include player display, eligibility, ranking, MLB team, game, lineup status, status, and rank reason.
+Current source contract:
+- Yahoo endpoint shape:
+  - `/league/{league_key}/players;status=FA;sort=OR;start={start};count=25;out=percent_owned?format=json`
+- Pagination:
+  - `start += 25`
+  - Yahoo returns 25 rows per page even if a larger count is requested
+- `;out=percent_owned` is the valid syntax.
+- `/out=percent_owned` is invalid and returns HTTP 400.
+
+Current filtering contract:
+- include only Yahoo `status=FA`
+- exclude waivers by source selection, because Yahoo waiver players are `status=W`, not `status=FA`
+- exclude pitchers (`P`, `SP`, `RP`)
+- exclude inactive/unavailable (`IL`, `IL10`, `IL15`, `IL60`, `NA`, `SUSP`, or non-empty `status_full`)
+- require MLB team to be playing today
+- require DB `rank_value <= 600`
+- require Yahoo percent-owned `> 0`
+
+Proof from `2026-05-10` after the fix:
+- `YAHOO_FA_TOTAL 1946`
+- `FA_BATTERS 961`
+- `ACTIVE_FA_BATTERS 190`
+- generated CSV rows: `46`
+- app FA rows: `45`
+- `HAS_CHASE_MEIDROTH True`
+- `HAS_JOSE_ALTUVE False`
+- `HAS_LUIS_CAMPUSANO False`
+
+Target-player interpretation:
+- Chase Meidroth was missing under the old source but now appears correctly:
+  - `469.p.62504,Chase Meidroth,CWS`
+- Jose Altuve is excluded correctly because he is not Yahoo `status=FA`; he was proven under waiver status.
+- Luis Campusano is excluded correctly because Yahoo marks him `IL10` with `status_full = 10-Day Injured List`.
 
 Important interpretation:
 - The old to-do item “Wire Batter Free Agents tab” is stale.
-- Updated framing: “Batter Free Agents is wired; harden later if needed.”
+- Updated framing: “Batter Free Agents is wired and source-corrected; later enhancements should focus on add/drop recommendations, lineup gating, and replacement-market statistics.”
 
 ### 3. Streamlit navigation cleanup
 Status: **Completed and pushed.**
@@ -267,7 +301,7 @@ What changed:
 Status: **Completed and pushed.**
 
 Commit:
-- `824d2a2 Handle unavailable batters and postponed games`
+- `9ee6129 Fix Yahoo free agent batter discovery`
 
 What changed:
 - Free Agent batters with `IL` or `NA` in Yahoo `eligible_positions` are excluded from recommendations.
@@ -295,28 +329,55 @@ Important interpretation:
 - Threshold logic was intentionally left unchanged because it was already dynamic.
 - DTD is treated as risk, not unavailability.
 
-### 5. Git checkpoint
-Status: **Committed and pushed.**
+### 5. Yahoo free-agent discovery correction
+Status: **Completed and pushed.**
 
 Commit:
+- `9ee6129 Fix Yahoo free agent batter discovery`
+
+What changed:
+- `runtime/refresh_all.sh` no longer uses the old DB anti-roster join for Batter Free Agent discovery.
+- The active FA generator now uses Yahoo’s native `status=FA` source with:
+  - `sort=OR`
+  - `count=25`
+  - `start += 25`
+  - `;out=percent_owned`
+- The generator writes the existing compatibility file:
+  - `data/derived/true_free_agent_batters_<date>.csv`
+- The filename is retained for compatibility, but its contents are now Yahoo-confirmed addable free agents.
+
+Proof:
+- `PYTHON_SYNTAX_OK`
+- `BASH_SYNTAX_OK`
+- `OLD_FA_SOURCE_ABSENT`
+- generated CSV rows: `46`
+- app FA rows: `45`
+- Chase Meidroth included
+- Jose Altuve excluded
+- Luis Campusano excluded
+
+Important interpretation:
+- This resolved the bug where waiver players and unavailable players could leak into the Batter Free Agents tab.
+- This also resolved the issue where valid addable players such as Chase Meidroth were missed by the earlier FA discovery logic.
+- No new table, no new pipeline, and no new permanent script were added.
+
+### 6. Git checkpoint
+Status: **Latest code fix committed and pushed.**
+
+Latest pushed checkpoint:
+- `9ee6129 Fix Yahoo free agent batter discovery`
+
+Earlier relevant checkpoints:
+- `824d2a2 Handle unavailable batters and postponed games`
 - `cca0f26 Fix roster manager date resolution and Streamlit navigation`
 
-Files included in that commit:
-- `pages/batters.py`
-- `pages/pitchers.py`
-- `services/queries.py`
-- `streamlit_app.py`
-
-Remaining uncommitted items seen after push:
-- `docs/0_RosterManager_Handoff.md`
-- `docs/1_Project_Structure.md`
-- `scripts/yahoo/data/`
-- `scripts/yahoo/probe_team_endpoints.py`
+Repo hygiene after FA fix:
+- local `runtime/refresh_all.sh.bak_*` backup artifacts were removed
+- `.gitignore` includes `*.bak_*` for future deterministic proof backups
+- generated Yahoo probe/script data should remain ignored
 
 Do not commit `.env`.
 Do not commit generated Yahoo data unless explicitly deciding it belongs in source.
-
----
 
 ## Current known issues / remaining work
 ### 1. Build pitcher workflow
@@ -372,14 +433,18 @@ Current design:
 - use **seed once from Yahoo UI**
 - then **maintain internally** from `roster_snapshot`
 
-### 6. Repo hygiene: Yahoo probe artifacts
-Current uncommitted items include:
-- `scripts/yahoo/data/`
-- `scripts/yahoo/probe_team_endpoints.py`
+### 6. Repo hygiene
+Status: **Mostly clean after latest proof cycle.**
 
-Before committing:
-- decide whether `probe_team_endpoints.py` is a permanent source utility or a temporary probe
-- ensure generated data under `scripts/yahoo/data/` is ignored or removed unless intentionally converted to a fixture
+Current rules:
+- generated Yahoo data should not be committed
+- `.env` should never be committed
+- local deterministic backup files like `*.bak_*` should not be committed
+- `.gitignore` includes `*.bak_*` so future proof backups do not appear as untracked zombie files
+
+If probe utilities are created later:
+- remove them after the proof cycle unless they become intentional permanent source utilities
+- do not keep one-off probes as zombie code
 
 ---
 
@@ -404,7 +469,7 @@ Before committing:
 - DTD status applies a mild `-3.0` status-risk penalty.
 - `IL*` and `NA` status override to unavailable.
 - `NO_GAME_TODAY` and `POSTPONED` override to unavailable.
-- Free Agent candidates with `IL` or `NA` in Yahoo `eligible_positions` are excluded before display/scoring.
+- Batter Free Agent candidates come from Yahoo `status=FA`; waiver players are excluded by source, and `IL`, `NA`, `SUSP`, and non-empty `status_full` candidates are excluded before display/scoring.
 - Some unavailable/bench rows may show `POSTED_BUT_NOT_FOUND` with `0.0` lineup points depending on row status/scoring path.
 
 ### Display note
@@ -624,11 +689,18 @@ Inside container:
 ---
 
 ## Git workflow
-Git is not installed on the NAS shell. Use Windows PowerShell from the personal laptop:
+Git is not installed on the NAS shell. Use Windows PowerShell from the personal laptop.
+
+Preferred workflow:
+- Keep PowerShell parked at the repo root:
 
 ```powershell
-Push-Location "\\Apollo\Bots\fantasy\mlf_roster_manager"
+Set-Location "\\Apollo\Bots\fantasy\mlf_roster_manager"
+```
 
+Then run Git commands directly from that location:
+
+```powershell
 git status --short
 git diff --stat
 
@@ -636,19 +708,18 @@ git add <files>
 git commit -m "message"
 git push origin main
 
-Pop-Location
+git status --short
 ```
 
 Rules:
 - Do not commit `.env`.
 - Do not commit generated data unless explicitly intended.
+- Do not commit local proof backups (`*.bak_*`).
 - Commit small deterministic increments.
 - Use NAS SSH for runtime/Docker proof and PowerShell for Git.
 
 Latest pushed checkpoint:
-- `824d2a2 Handle unavailable batters and postponed games`
-
----
+- `9ee6129 Fix Yahoo free agent batter discovery`
 
 ## How to find answers instead of guessing
 When the next chat needs to answer a question, use this search order:
@@ -692,6 +763,25 @@ Check:
 - `runtime/refresh_all.sh`
 - then read latest files under `data/derived/`
 - then inspect runtime logs / status JSON
+
+### If the question is about Batter Free Agent availability
+Check in order:
+1. `runtime/refresh_all.sh` FA generator source
+2. generated `data/derived/true_free_agent_batters_<date>.csv`
+3. `services/queries.py::fetch_available_batter_rows(...)`
+4. final app rows from the Batter Free Agents inspection command
+
+Current Yahoo source rule:
+- `status=FA`
+- `sort=OR`
+- `start += 25`
+- `count=25`
+- `;out=percent_owned`
+
+Do not use:
+- broad DB anti-roster joins as the source of FA truth
+- Yahoo `status=A` for addable Free Agents, because it includes waiver players
+- `/out=percent_owned`, because the working syntax is `;out=percent_owned`
 
 ### If the question is about lineup confirmation
 Check in order:
@@ -756,14 +846,16 @@ Check:
 Stop after documentation + GitHub unless explicitly starting a new cycle.
 
 Recommended order:
-1. Commit documentation for unavailable-status and postponed-game fixes
-2. Decide repo hygiene for `scripts/yahoo/data/` and `scripts/yahoo/probe_team_endpoints.py`
-3. Build pitcher workflow
+1. Commit documentation for the Yahoo FA discovery fix and repo hygiene updates
+2. Resume Usual-RMT / MLF-RMT / MiLF-RMT architecture split only after docs are locked
+3. Build pitcher workflow after the league-specific split decision is stable
 4. Add lineup-reliability weighting to future opportunity denominator
-5. Fix true recent H/AB so AVG contribution is real
-6. Finish MLBAM team-aware disambiguation
-7. Optional: harden Batter Free Agents with better comparison deltas, filters, and add/drop recommendation logic
-8. General UI polish and width cleanup
+5. Add replacement-market statistics for slot thresholds, likely starting with rolling 7-day top FA ranks by slot
+6. Add tomorrow / day-after-tomorrow FA ranking support later
+7. Fix true recent H/AB so AVG contribution is real
+8. Finish MLBAM team-aware disambiguation
+9. Optional: harden Batter Free Agents with add/drop recommendation logic and lineup-gated display filters
+10. General UI polish and width cleanup
 
 ---
 
@@ -777,7 +869,7 @@ Repository is live and public:
 - License: `MIT`
 
 Latest pushed checkpoint:
-- `824d2a2 Handle unavailable batters and postponed games`
+- `9ee6129 Fix Yahoo free agent batter discovery`
 
 Operational rule:
 - make documentation/code changes locally
@@ -796,7 +888,7 @@ Use the text below when starting a fresh chat:
 > `streamlit_app.py` is now a router. Batters logic lives in `pages/batters.py`. Pitchers has its own sidebar page at `pages/pitchers.py`.
 > Date resolution uses New York today by default when `DEFAULT_AS_OF_DATE=` is blank. `DEFAULT_DATE_OFFSET_DAYS=0/1/2` supports today/tomorrow/day-after.
 > Lineup matching was proven functionally correct for the latest proof cycle; do not reopen it unless new proof shows `LINEUP_NOT_CONFIRMED` or incorrect `POSTED_BUT_NOT_FOUND` behavior.
-> Batter Free Agents is wired and usable; do not treat it as an unwired placeholder. IL/NA Free Agent candidates are excluded; DTD batters receive a mild status-risk penalty; postponed games rank as unavailable.
+> Batter Free Agents is wired and source-corrected; do not treat it as an unwired placeholder. FA discovery uses Yahoo `status=FA;sort=OR;count=25;start+=25;out=percent_owned`. Waivers, IL/NA/SUSP, and inactive candidates are excluded; DTD batters receive a mild status-risk penalty; postponed games rank as unavailable.
 > Next major feature is the Pitchers workflow.
 > First, confirm the current architecture, known-good commands, and open issues before proposing changes.
 > When investigating, prefer current files, DB, logs, CSV outputs, and live row proof over theorizing.

@@ -3,7 +3,7 @@
 ## Purpose
 This document defines the intended folder layout for the MajorLeagueFantasy-RosterManager project and separates source code from generated runtime artifacts, DB-managed state, temporary probe/debug output, and local runtime configuration.
 
-Last updated: 2026-05-08
+Last updated: 2026-05-10
 
 ---
 
@@ -49,10 +49,10 @@ Streamlit is the only active UI target.
 - `streamlit_app.py` — Streamlit router / entrypoint
 - `pages/batters.py` — primary batter UI and current application workspace
 - `pages/pitchers.py` — pitcher workflow shell
-- `services/queries.py` ? batter row assembly, data loading, date context resolution, FA row assembly, slot usage queries, unavailable-game classification, postponed-game display, and collapsed unavailable ranking
-- `services/scoring.py` ? batter scoring / ranking logic, including DTD status-risk penalty and unavailable game/status overrides
+- `services/queries.py` — batter row assembly, data loading, date context resolution, FA row assembly, slot usage queries, unavailable-game classification, postponed-game display, and collapsed unavailable ranking
+- `services/scoring.py` — batter scoring / ranking logic, including DTD status-risk penalty and unavailable game/status overrides
 - `runtime/refresh_live.sh` — lighter refresh path
-- `runtime/refresh_all.sh` — full refresh path
+- `runtime/refresh_all.sh` — full refresh path; also generates the Yahoo-confirmed active batter free-agent candidate CSV
 - `runtime/refresh_league_rosters.sh` — roster snapshot refresh orchestration
 
 ### Scripts layout
@@ -61,7 +61,7 @@ Streamlit is the only active UI target.
 - `scripts/` root — MLB/splits/roster pipeline scripts that are project-local but not Yahoo-auth specific
   - examples:
     - `refresh_starting_lineups.py`
-    - `refresh_mlb_probable_pitcher_daily.py` ? preserves MLB `status` inside `raw_json` for postponed-game detection
+    - `refresh_mlb_probable_pitcher_daily.py` — preserves MLB `status` inside `raw_json` for postponed-game detection
     - `refresh_probable_pitcher_hand.py`
     - `build_mlbam_player_map.py`
     - `refresh_hitter_splits_mlb.py`
@@ -149,8 +149,13 @@ These are expected to exist during operation but are **not** source-of-truth cod
 - `data/derived/starting_lineup_teams_<date>.csv`
 - `data/derived/recent7_hitter_inputs_<date>.csv`
 - `data/derived/hitter_split_inputs_<date>.csv`
-- `data/derived/true_free_agent_batters_<date>.csv`
+- `data/derived/true_free_agent_batters_<date>.csv` — generated batter FA candidate input; despite the legacy filename, this now means Yahoo-confirmed `status=FA`, active, batter-only candidates that pass the refresh filter
 - other app input CSVs produced by refresh pipelines
+
+`true_free_agent_batters_<date>.csv` is generated, not hand-edited. Its source contract is documented here because it prevents waiver/IL leakage:
+- Yahoo endpoint pattern: `/league/{league_key}/players;status=FA;sort=OR;start={n};count=25;out=percent_owned?format=json`
+- `start` increments by `25`
+- generated rows are later enriched by `services/queries.py`
 
 ### Runtime status / logs
 - `runtime/logs/` and `runtime/status/` are generated operational artifacts and should not be treated as source code.
@@ -193,13 +198,36 @@ Implemented / usable:
 ### Batter Free Agents
 The Batter Free Agents tab is wired and usable.
 
-Confirmed proof:
-- `fetch_available_batter_rows(...)` is wired and usable
-- FA rows include eligibility, ranking, game context, lineup status, active status, and rank reason
-- Free Agent candidates with Yahoo `IL` or `NA` tags inside `eligible_positions` are excluded before display/scoring
-- Current proof from 2026-05-08:
-  - `FA_STATUS_COUNTS {'Active': 109}`
-  - `FA_IL_NA_ROWS []`
+Confirmed behavior:
+- `runtime/refresh_all.sh` generates `data/derived/true_free_agent_batters_<date>.csv` from Yahoo's public Fantasy API.
+- The current Yahoo source is:
+  - `/league/{league_key}/players;status=FA;sort=OR;start={n};count=25;out=percent_owned?format=json`
+- Pagination must increment by `25`, because Yahoo returns 25 players per page.
+- `;out=percent_owned` is the proven valid syntax; `/out=percent_owned` fails.
+- The generator excludes:
+  - waiver players
+  - pitchers
+  - `IL`, `IL10`, `IL15`, `IL60`
+  - `NA`
+  - `SUSP`
+  - candidates whose MLB team is not playing today
+  - candidates that fail `rank_value <= 600 AND percent_owned > 0`
+- `fetch_available_batter_rows(...)` then assembles game, lineup, scoring, status, and ranking context for the UI.
+- FA rows include eligibility, ranking, game context, lineup status, active status, and rank reason.
+
+Confirmed proof from `2026-05-10` after commit `9ee6129`:
+- generated CSV rows: `46`
+- app FA rows: `45`
+- Chase Meidroth included
+- Jose Altuve excluded because he was not Yahoo `status=FA`
+- Luis Campusano excluded because he was `IL10`
+- `HAS_CHASE_MEIDROTH True`
+- `HAS_JOSE_ALTUVE False`
+- `HAS_LUIS_CAMPUSANO False`
+
+Important implementation note:
+- Do not revert this to a DB anti-roster join. That reintroduced waiver and unavailable-player leakage.
+- The broad DB player pool remains useful for rank/Ros% metadata, but Yahoo `status=FA` is the availability source of truth.
 
 ### Pitchers page
 `pages/pitchers.py` is currently only a Streamlit shell.
@@ -227,6 +255,9 @@ Next major feature work should start here, after read-only proof of current pitc
 - MLB game status is now preserved in `mlb_probable_pitcher_daily.raw_json` during probable-pitcher refresh.
 - Postponed rows use `LINEUP_NOT_APPLICABLE`, display `Postponed - <reason>` when available, and rank `0`.
 - Threshold logic was intentionally left unchanged during the unavailable/postponed-game fix because it was already dynamic.
+- Batter Free Agent discovery now uses Yahoo `status=FA`, `sort=OR`, `count=25`, `start += 25`, and `;out=percent_owned`.
+- The earlier broad `status=FA` scan was too light because it did not use the proven sorted/paginated source and missed players such as Chase Meidroth.
+- The current FA generator is the active path in `runtime/refresh_all.sh`; no new exporter script or table was added.
 
 ---
 
@@ -234,6 +265,7 @@ Next major feature work should start here, after read-only proof of current pitc
 - No `.env` in Git
 - No `.env.backup_*` files in the repo tree
 - No `*.bak` files in the repo tree
+- No `*.bak_*` files in the repo tree
 - No `*.backup_*` files in the repo tree
 - No `__pycache__` or `*.pyc`
 - No seam/test files such as `*SEAM1_TEST*` or `*.rmt_test.csv`
@@ -279,29 +311,42 @@ Git is run from the user's personal laptop, not directly on the NAS SSH shell.
 - Default branch: `main`
 - License: `MIT`
 
-### Recent code checkpoint
+### Recent code checkpoints
 Committed and pushed:
 - `824d2a2 Handle unavailable batters and postponed games`
+- `9ee6129 Fix Yahoo free agent batter discovery`
 
-This commit included:
+`824d2a2` included:
 - IL/NA Free Agent exclusion from Yahoo `eligible_positions`
 - DTD status-risk penalty
 - MLB status preservation in probable-pitcher refresh
 - postponed-game classification and display
 - postponed-game unavailable ranking
 - Rank Reason `S = Status` UI support
+
+`9ee6129` included:
+- replacement of the Batter FA discovery source in `runtime/refresh_all.sh`
+- Yahoo `status=FA` discovery using `sort=OR`, 25-row pagination, and `;out=percent_owned`
+- exclusion proof for waiver Jose Altuve
+- exclusion proof for IL10 Luis Campusano
+- inclusion proof for Chase Meidroth
+
 ### Staging rule
 Commit in small deterministic increments. Stage only files verified in the current work cycle.
 
+Preferred PowerShell workflow:
+- Keep PowerShell parked at the repo root:
+  - `\\Apollo\Bots\fantasy\mlf_roster_manager`
+- Then run Git commands directly from that location.
+
 Example:
 ```powershell
-Push-Location "\\Apollo\Bots\fantasy\mlf_roster_manager"
-
-git add pages/batters.py scripts/refresh_mlb_probable_pitcher_daily.py services/queries.py services/scoring.py
-git commit -m "Handle unavailable batters and postponed games"
+git status --short
+git diff --check
+git add runtime/refresh_all.sh
+git commit -m "Fix Yahoo free agent batter discovery"
 git push origin main
-
-Pop-Location
+git status --short
 ```
 
 ---
@@ -309,9 +354,11 @@ Pop-Location
 ## Current cleanup intent
 1. Keep repo focused on source + docs only
 2. Keep generated Yahoo probes and raw payloads out of commits unless explicitly needed
-3. Harden `.gitignore` for generated data / logs / probe output
+3. Keep `.gitignore` hardened for generated data, logs, probe output, and local backup artifacts such as `*.bak_*`
 4. Re-evaluate any ambiguous top-level folders after proof of use
 5. Keep one approved source path per concern and avoid duplicate script trees
 6. Keep `streamlit_app.py` as a router and page content under `pages/`
 7. Keep Batter work on `pages/batters.py`
-8. Start Pitcher workflow work on `pages/pitchers.py`
+8. Keep the current Yahoo FA generator inside `runtime/refresh_all.sh`; do not add a parallel exporter unless intentionally replacing the old path in the same change
+9. Resume league-specific architecture work next: Usual-RMT, MLF-RMT, MiLF-RMT
+10. Pitcher workflow remains a later major feature unless explicitly reprioritized
