@@ -63,6 +63,30 @@ REFRESH_LABELS = {
 }
 
 
+def build_refresh_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+
+    app_alias = env.get("APP_ALIAS", "").strip()
+    if app_alias:
+        env["RMT_ENV_FILE"] = f"/app/instances/{app_alias}/.env"
+    else:
+        env.setdefault("RMT_ENV_FILE", "/app/.env")
+
+    env.setdefault("RMT_PROJECT_ROOT", "/app")
+    env.setdefault("RMT_RAW_ROOT", "/app/data/raw")
+    env.setdefault("RMT_DERIVED_ROOT", "/app/data/derived")
+    env.setdefault("RMT_SHARED_RAW_ROOT", "/app/data/raw")
+    env.setdefault("RMT_LOG_DIR", str(LOG_DIR))
+    env.setdefault("RMT_STATUS_DIR", str(STATUS_DIR))
+
+    # When refresh scripts are launched from inside a Streamlit container,
+    # docker cp destination paths must be container-visible /app paths.
+    env.setdefault("RMT_HOST_RAW_ROOT", env["RMT_RAW_ROOT"])
+    env.setdefault("RMT_HOST_DERIVED_ROOT", env["RMT_DERIVED_ROOT"])
+
+    return env
+
+
 def _parse_utc(ts: str | None):
     if not ts:
         return None
@@ -933,6 +957,7 @@ with st.sidebar:
                     ["/bin/bash", refresh_script],
                     capture_output=True,
                     text=True,
+                    env=build_refresh_subprocess_env(),
                 )
 
             st.session_state["last_refresh_mode"] = refresh_label
