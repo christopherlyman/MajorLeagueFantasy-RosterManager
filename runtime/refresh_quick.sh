@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ -d "/app/runtime" ]]; then
-  ROOT="/app"
+  ROOT="${RMT_PROJECT_ROOT:-/app}"
 else
-  ROOT="/Volume1/Bots/fantasy/mlf_roster_manager"
+  ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
 
 TODAY="${1:-$(TZ=America/New_York date +%F)}"

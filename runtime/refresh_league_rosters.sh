@@ -2,12 +2,17 @@
 set -euo pipefail
 
 if [[ -d "/app/runtime" ]]; then
-  ROOT="/app"
+  ROOT="${RMT_PROJECT_ROOT:-/app}"
 else
-  ROOT="/Volume1/Bots/fantasy/mlf_roster_manager"
+  ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
 
-ENV_FILE="$ROOT/.env"
+APP_CONTAINER="${RMT_CONTAINER_NAME:-mlf_roster_manager}"
+ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
+APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
@@ -19,9 +24,11 @@ SEASON_YEAR="${TODAY:0:4}"
 
 mapfile -t TEAM_KEYS < <(
 docker exec -i \
+  -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
+  -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
   -e DEFAULT_LEAGUE_KEY="$DEFAULT_LEAGUE_KEY" \
   -e SEASON_YEAR="$SEASON_YEAR" \
-  mlf_roster_manager bash -lc "cd /app && python - <<'PYTEAM'
+  "$APP_CONTAINER" bash -lc "cd /app && python - <<'PYTEAM'
 from services.db import get_connection
 import os
 
@@ -59,20 +66,20 @@ for TEAM_KEY in "${TEAM_KEYS[@]}"; do
   echo "TEAM_KEY=$TEAM_KEY"
   echo "============================================================"
 
-  docker exec -i mlf_roster_manager bash -lc "
+  docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && YAHOO_TEAM_KEY=$TEAM_KEY python yahoo_team_roster.py
 "
 
-  RAW_ROSTER_HOST="$ROOT/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
-  docker cp     "mlf_roster_manager:/app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json"     "$RAW_ROSTER_HOST"
+  RAW_ROSTER_HOST="$HOST_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
+  docker cp     "${APP_CONTAINER}:$APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster.json"     "$RAW_ROSTER_HOST"
 
   echo "COPIED $RAW_ROSTER_HOST"
 
-  docker exec -i mlf_roster_manager bash -lc "
-cd /app && python scripts/build_roster_snapshot.py   --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json   --out /app/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
+  docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
+cd /app && python scripts/build_roster_snapshot.py   --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json   --out $APP_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
 "
 
-  SNAPSHOT_HOST="$ROOT/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv"
+  SNAPSHOT_HOST="$HOST_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv"
   python3 - "$SNAPSHOT_HOST" "$TODAY" <<'PYNORM'
 import csv
 from pathlib import Path
@@ -99,8 +106,8 @@ print(f"ROWS {len(rows)}")
 print(f"FORCED roster_date={today}")
 PYNORM
 
-  docker exec -i mlf_roster_manager bash -lc "
-cd /app && PYTHONPATH=/app python scripts/load_roster_snapshot.py   --src /app/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
+  docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
+cd /app && PYTHONPATH=/app python scripts/load_roster_snapshot.py   --src $APP_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
 "
 done
 

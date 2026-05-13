@@ -2,13 +2,18 @@
 set -euo pipefail
 
 if [[ -d "/app/runtime" ]]; then
-  ROOT="/app"
+  ROOT="${RMT_PROJECT_ROOT:-/app}"
 else
-  ROOT="/Volume1/Bots/fantasy/mlf_roster_manager"
+  ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
-ENV_FILE="$ROOT/.env"
-LOG_DIR="$ROOT/runtime/logs"
-STATUS_DIR="$ROOT/runtime/status"
+APP_CONTAINER="${RMT_CONTAINER_NAME:-mlf_roster_manager}"
+ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+LOG_DIR="${RMT_LOG_DIR:-$ROOT/runtime/logs}"
+STATUS_DIR="${RMT_STATUS_DIR:-$ROOT/runtime/status}"
+APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
+APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 
 mkdir -p "$LOG_DIR" "$STATUS_DIR"
@@ -115,27 +120,27 @@ print(f"DEFAULT_AS_OF_DATE={today}")
 PY
 
 stage "REFRESH YAHOO ROSTER JSON"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_TEAM_KEY=$TEAM_KEY python yahoo_team_roster.py
 "
 
-RAW_ROSTER_HOST="$ROOT/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
+RAW_ROSTER_HOST="$HOST_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json"
 docker cp \
-  "mlf_roster_manager:/app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster.json" \
+  "${APP_CONTAINER}:$APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster.json" \
   "$RAW_ROSTER_HOST"
 
 echo "COPIED $RAW_ROSTER_HOST"
 
 stage "BUILD ROSTER SNAPSHOT CSV"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/build_roster_snapshot.py \
-  --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
-  --out /app/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
+  --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
+  --out $APP_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
 "
 
 stage "NORMALIZE SNAPSHOT DATE TO TODAY"
-SNAPSHOT_HOST="$ROOT/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv"
+SNAPSHOT_HOST="$HOST_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv"
 python3 - "$SNAPSHOT_HOST" "$TODAY" <<'PY'
 import csv
 from pathlib import Path
@@ -163,28 +168,28 @@ print(f"FORCED roster_date={today}")
 PY
 
 stage "LOAD ROSTER SNAPSHOT INTO POSTGRES"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && PYTHONPATH=/app python scripts/load_roster_snapshot.py \
-  --src /app/data/derived/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
+  --src $APP_DERIVED_ROOT/team_${SAFE_TEAM_KEY}_roster_${TODAY}_snapshot.csv
 "
 
 stage "REFRESH MLB GAMES / PROBABLE PITCHERS"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && PYTHONPATH=/app python scripts/refresh_mlb_probable_pitcher_daily.py \
   --as-of-date $TODAY
 "
 
 stage "REFRESH MLB STARTING LINEUPS"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/refresh_starting_lineups.py \
   --as-of-date $TODAY
 "
 
 stage "REFRESH PROBABLE PITCHER HANDEDNESS"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && PYTHONPATH=/app python scripts/refresh_probable_pitcher_hand.py \
   --as-of-date $TODAY \
-  --out /app/data/derived/opposing_probable_pitchers_with_hand_${TODAY}.csv
+  --out $APP_DERIVED_ROOT/opposing_probable_pitchers_with_hand_${TODAY}.csv
 "
 
 stage "VERIFY COUNTS"
@@ -203,14 +208,14 @@ WHERE as_of_date = DATE '$TODAY';
 ")
 
 LINEUP_COUNT=0
-LINEUP_FILE="$ROOT/data/derived/starting_lineup_players_${TODAY}.csv"
+LINEUP_FILE="$HOST_DERIVED_ROOT/starting_lineup_players_${TODAY}.csv"
 if [[ -f "$LINEUP_FILE" ]]; then
   LINEUP_COUNT=$(( $(wc -l < "$LINEUP_FILE") - 1 ))
   if [[ "$LINEUP_COUNT" -lt 0 ]]; then LINEUP_COUNT=0; fi
 fi
 
 HAND_COUNT=0
-HAND_FILE="$ROOT/data/derived/opposing_probable_pitchers_with_hand_${TODAY}.csv"
+HAND_FILE="$HOST_DERIVED_ROOT/opposing_probable_pitchers_with_hand_${TODAY}.csv"
 if [[ -f "$HAND_FILE" ]]; then
   HAND_COUNT=$(( $(wc -l < "$HAND_FILE") - 1 ))
   if [[ "$HAND_COUNT" -lt 0 ]]; then HAND_COUNT=0; fi
@@ -222,7 +227,7 @@ echo "LINEUP_COUNT=$LINEUP_COUNT"
 echo "HAND_COUNT=$HAND_COUNT"
 
 stage "SAMPLE BATTING ROWS"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && DEFAULT_AS_OF_DATE=${TODAY} python - << 'PY'
 from services.queries import get_default_context, fetch_batter_roster_rows
 

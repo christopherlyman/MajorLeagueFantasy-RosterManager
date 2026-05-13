@@ -2,14 +2,19 @@
 set -euo pipefail
 
 if [[ -d "/app/runtime" ]]; then
-  ROOT="/app"
+  ROOT="${RMT_PROJECT_ROOT:-/app}"
 else
-  ROOT="/Volume1/Bots/fantasy/mlf_roster_manager"
+  ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
+APP_CONTAINER="${RMT_CONTAINER_NAME:-mlf_roster_manager}"
 LIVE_SCRIPT="$ROOT/runtime/refresh_live.sh"
-ENV_FILE="$ROOT/.env"
-LOG_DIR="$ROOT/runtime/logs"
-STATUS_DIR="$ROOT/runtime/status"
+ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+LOG_DIR="${RMT_LOG_DIR:-$ROOT/runtime/logs}"
+STATUS_DIR="${RMT_STATUS_DIR:-$ROOT/runtime/status}"
+APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
+APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 MODE="${REFRESH_ALL_MODE:-full}"
 
@@ -114,7 +119,7 @@ if [[ "$MODE" == "full" || "$MODE" == "deep" ]]; then
     PLAYER_POOL_MODE="full"
   fi
 
-  docker exec -i mlf_roster_manager bash -lc "
+  docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_LEAGUE_KEY=$LEAGUE_KEY \
 SEASON_YEAR=${TODAY:0:4} \
@@ -128,42 +133,44 @@ else
 fi
 
 stage "REFRESH ALL: RECENT PIPELINE"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_TEAM_KEY=$TEAM_KEY \
 YAHOO_AS_OF_DATE=$TODAY \
-YAHOO_RECENT_OUT=/app/data/derived/recent7_hitter_inputs_${TODAY}.csv \
+YAHOO_RECENT_OUT=$APP_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv \
 python refresh_recent_yahoo_api.py
 "
 
 docker cp \
-  "mlf_roster_manager:/app/data/derived/recent7_hitter_inputs_${TODAY}.csv" \
-  "$ROOT/data/derived/recent7_hitter_inputs_${TODAY}.csv"
+  "${APP_CONTAINER}:$APP_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv" \
+  "$HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"
 
-echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_${TODAY}.csv"
+echo "COPIED $HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"
 
 stage "REFRESH ALL: SPLITS PIPELINE"
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \
-  --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
-  --out /app/data/derived/mlbam_player_map_${TODAY}.csv
+  --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
+  --out $APP_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv
 "
 
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/refresh_hitter_splits_mlb.py \
-  --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
-  --map /app/data/derived/mlbam_player_map_${TODAY}.csv \
+  --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
+  --map $APP_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv \
   --season-start 2025 \
   --season-end 2026 \
-  --out /app/data/derived/hitter_split_inputs_${TODAY}.csv
+  --out $APP_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv
 "
 
 docker exec -i \
+  -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
+  -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
   -e RMT_FA_AS_OF_DATE="${TODAY}" \
   -e RMT_FA_LEAGUE_KEY="${LEAGUE_KEY}" \
   -e RMT_FA_MODE="${MODE}" \
-  -e RMT_FA_OUT="/app/data/derived/true_free_agent_batters_${TODAY}.csv" \
-  mlf_roster_manager bash -lc 'cd /app && PYTHONPATH=/app python - << "PYFA"
+  -e RMT_FA_OUT="$APP_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv" \
+  "$APP_CONTAINER" bash -lc 'cd /app && PYTHONPATH=/app python - << "PYFA"
 import csv
 import os
 import sys
@@ -402,54 +409,54 @@ PYFA'
 
 
 docker cp \
-  "$ROOT/data/derived/true_free_agent_batters_${TODAY}.csv" \
-  "mlf_roster_manager:/app/data/derived/true_free_agent_batters_${TODAY}.csv"
+  "$HOST_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv" \
+  "${APP_CONTAINER}:$APP_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv"
 
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && \
 YAHOO_AS_OF_DATE=$TODAY \
-YAHOO_PLAYERS_CSV=/app/data/derived/true_free_agent_batters_${TODAY}.csv \
-YAHOO_RECENT_OUT=/app/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv \
+YAHOO_PLAYERS_CSV=$APP_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv \
+YAHOO_RECENT_OUT=$APP_DERIVED_ROOT/recent7_hitter_inputs_fa_${TODAY}.csv \
 python refresh_recent_yahoo_api.py
 "
 
 docker cp \
-  "mlf_roster_manager:/app/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv" \
-  "$ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
+  "${APP_CONTAINER}:$APP_DERIVED_ROOT/recent7_hitter_inputs_fa_${TODAY}.csv" \
+  "$HOST_DERIVED_ROOT/recent7_hitter_inputs_fa_${TODAY}.csv"
 
-echo "COPIED $ROOT/data/derived/recent7_hitter_inputs_fa_${TODAY}.csv"
+echo "COPIED $HOST_DERIVED_ROOT/recent7_hitter_inputs_fa_${TODAY}.csv"
 
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \
-  --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
-  --players-csv /app/data/derived/true_free_agent_batters_${TODAY}.csv \
-  --out /app/data/derived/mlbam_player_map_fa_${TODAY}.csv
+  --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
+  --players-csv $APP_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv \
+  --out $APP_DERIVED_ROOT/mlbam_player_map_fa_${TODAY}.csv
 "
 
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/refresh_hitter_splits_mlb.py \
-  --src /app/data/raw/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
-  --players-csv /app/data/derived/true_free_agent_batters_${TODAY}.csv \
-  --map /app/data/derived/mlbam_player_map_fa_${TODAY}.csv \
+  --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
+  --players-csv $APP_DERIVED_ROOT/true_free_agent_batters_${TODAY}.csv \
+  --map $APP_DERIVED_ROOT/mlbam_player_map_fa_${TODAY}.csv \
   --season-start 2025 \
   --season-end 2026 \
-  --out /app/data/derived/hitter_split_inputs_fa_${TODAY}.csv
+  --out $APP_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv
 "
 
 stage "REFRESH ALL: VERIFY BASELINES"
 echo '--- recent ---'
-sed -n '1,20p' "$ROOT/data/derived/recent7_hitter_inputs_${TODAY}.csv"
+sed -n '1,20p' "$HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"
 echo
 echo '--- mlbam map ---'
-sed -n '1,20p' "$ROOT/data/derived/mlbam_player_map_${TODAY}.csv"
+sed -n '1,20p' "$HOST_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv"
 echo
 echo '--- splits ---'
-sed -n '1,20p' "$ROOT/data/derived/hitter_split_inputs_${TODAY}.csv"
+sed -n '1,20p' "$HOST_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv"
 echo
 echo '--- fa splits ---'
-sed -n '1,20p' "$ROOT/data/derived/hitter_split_inputs_fa_${TODAY}.csv"
+sed -n '1,20p' "$HOST_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv"
 
-docker exec -i mlf_roster_manager bash -lc "
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && DEFAULT_AS_OF_DATE=${TODAY} python - << 'PY'
 from services.queries import get_default_context, fetch_batter_roster_rows
 
