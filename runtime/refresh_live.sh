@@ -6,7 +6,7 @@ if [[ -d "/app/runtime" ]]; then
 else
   ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
-APP_CONTAINER="${RMT_CONTAINER_NAME:-mlf_roster_manager}"
+APP_CONTAINER="${RMT_CONTAINER_NAME:-usual-rmt}"
 ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
 LOG_DIR="${RMT_LOG_DIR:-$ROOT/runtime/logs}"
 STATUS_DIR="${RMT_STATUS_DIR:-$ROOT/runtime/status}"

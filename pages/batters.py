@@ -17,6 +17,7 @@ from services.queries import (
     fetch_available_batter_rows,
     fetch_batter_roster_rows,
     fetch_remaining_starts_by_slot,
+    fetch_hitter_slot_order,
     get_default_context,
     resolve_as_of_date,
 )
@@ -43,11 +44,11 @@ def _read_env_file(path: str = "/app/.env") -> dict[str, str]:
 def get_runtime_context() -> dict[str, str]:
     file_vals = _read_env_file("/app/.env")
     return {
-        "league_key": file_vals.get("DEFAULT_LEAGUE_KEY") or os.getenv("DEFAULT_LEAGUE_KEY", ""),
-        "team_key": file_vals.get("DEFAULT_TEAM_KEY") or os.getenv("DEFAULT_TEAM_KEY", ""),
+        "league_key": os.getenv("DEFAULT_LEAGUE_KEY") or file_vals.get("DEFAULT_LEAGUE_KEY", ""),
+        "team_key": os.getenv("DEFAULT_TEAM_KEY") or file_vals.get("DEFAULT_TEAM_KEY", ""),
         "as_of_date": resolve_as_of_date(
-            file_vals.get("DEFAULT_AS_OF_DATE") or os.getenv("DEFAULT_AS_OF_DATE", ""),
-            file_vals.get("DEFAULT_DATE_OFFSET_DAYS") or os.getenv("DEFAULT_DATE_OFFSET_DAYS", "0"),
+            os.getenv("DEFAULT_AS_OF_DATE") or file_vals.get("DEFAULT_AS_OF_DATE", ""),
+            os.getenv("DEFAULT_DATE_OFFSET_DAYS") or file_vals.get("DEFAULT_DATE_OFFSET_DAYS", "0"),
         ),
     }
 
@@ -420,7 +421,7 @@ def format_slot_skip_budget_caption(meta: dict) -> str:
     return "Skip budget — " + " | ".join(parts)
 
 
-SLOT_ORDER = [
+DEFAULT_HITTER_SLOT_ORDER = [
     ("C", "C"),
     ("1B", "1B"),
     ("2B", "2B"),
@@ -432,6 +433,8 @@ SLOT_ORDER = [
     ("OF3", "OF"),
     ("UTIL", "UTIL"),
 ]
+
+SLOT_ORDER = list(DEFAULT_HITTER_SLOT_ORDER)
 
 UNAVAILABLE_PREFIXES = ("IL", "NA")
 SUFFIXES = {"JR", "JR.", "SR", "SR.", "II", "III", "IV", "V"}
@@ -515,20 +518,41 @@ def has_game_today(row: dict) -> bool:
     return str(row.get("game_status") or "").strip().upper() == "GAME_FOUND"
 
 
+def use_h2h_start_every_active_mode() -> bool:
+    app_alias = os.getenv("APP_ALIAS", "").strip().lower()
+    if app_alias in {"mlf-rmt", "milf-rmt"}:
+        return True
+
+    league_key = str((globals().get("ctx") or {}).get("league_key") or "").strip()
+    return league_key in {"469.l.41640", "469.l.60688"}
+
+
 def slot_min_ranking(slot_id: str, slot_type: str) -> float:
+    if use_h2h_start_every_active_mode():
+        return 1.0
+
     try:
         return float(_CURRENT_SLOT_FLOORS.get(slot_type, 50.0))
     except Exception:
         return 50.0
+
+
 def startable_for_slot(row: dict, slot_id: str, slot_type: str) -> bool:
     if not eligible_for_slot(row, slot_type):
         return False
     if not has_game_today(row):
         return False
+
+    if use_h2h_start_every_active_mode():
+        lineup_status = str(row.get("lineup_status") or "").strip().upper()
+        if lineup_status == "POSTED_BUT_NOT_FOUND":
+            return False
+
     try:
         ranking = float(row.get("ranking") or 0.0)
     except Exception:
         ranking = 0.0
+
     return ranking >= slot_min_ranking(slot_id, slot_type)
 
 
@@ -757,6 +781,12 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
 
 
 ctx = get_runtime_context()
+
+try:
+    SLOT_ORDER = fetch_hitter_slot_order(ctx["league_key"], int(str(ctx["as_of_date"])[:4]))
+except Exception as exc:
+    st.warning(f"Using default hitter slot order because league profile slots could not be loaded: {exc}")
+    SLOT_ORDER = list(DEFAULT_HITTER_SLOT_ORDER)
 
 st.title(APP_DISPLAY_NAME)
 

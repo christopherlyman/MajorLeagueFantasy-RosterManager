@@ -1,19 +1,55 @@
 services:
-  roster_manager:
+  usual_rmt:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: mlf_roster_manager
+    container_name: usual-rmt
     working_dir: /app
     command: streamlit run /app/streamlit_app.py --server.port 8050 --server.address 0.0.0.0
     env_file:
-      - ../.env
+      - ../instances/usual-rmt/.env
     volumes:
       - ..:/app
       - /var/run/docker.sock:/var/run/docker.sock
       - /Volume1/@apps/DockerEngine/dockerd/bin/docker:/usr/local/bin/docker:ro
     ports:
       - "8050:8050"
+    networks:
+      - mlf_net
+
+  mlf_rmt:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: mlf_rmt
+    working_dir: /app
+    command: streamlit run /app/streamlit_app.py --server.port 8051 --server.address 0.0.0.0
+    env_file:
+      - ../instances/mlf-rmt/.env
+    volumes:
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Volume1/@apps/DockerEngine/dockerd/bin/docker:/usr/local/bin/docker:ro
+    ports:
+      - "8051:8051"
+    networks:
+      - mlf_net
+
+  milf_rmt:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: milf_rmt
+    working_dir: /app
+    command: streamlit run /app/streamlit_app.py --server.port 8052 --server.address 0.0.0.0
+    env_file:
+      - ../instances/milf-rmt/.env
+    volumes:
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Volume1/@apps/DockerEngine/dockerd/bin/docker:/usr/local/bin/docker:ro
+    ports:
+      - "8052:8052"
     networks:
       - mlf_net
 

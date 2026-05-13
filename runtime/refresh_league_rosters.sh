@@ -7,7 +7,7 @@ else
   ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
 
-APP_CONTAINER="${RMT_CONTAINER_NAME:-mlf_roster_manager}"
+APP_CONTAINER="${RMT_CONTAINER_NAME:-usual-rmt}"
 ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
 APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
 APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"

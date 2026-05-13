@@ -80,17 +80,27 @@ def _raw_root() -> Path:
     return Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw"))
 
 
+def _shared_raw_root() -> Path:
+    return Path(os.environ.get("RMT_SHARED_RAW_ROOT", "/app/data/raw"))
+
+
 def _derived_root() -> Path:
     return Path(os.environ.get("RMT_DERIVED_ROOT", "/app/data/derived"))
 
 
 def _pick_savant_file(kind: str, year: int) -> Path:
-    root = _raw_root() / "savant"
     if kind == "batters":
-        return root / f"expected_stats_batters_{year}.csv"
-    if kind == "pitchers":
-        return root / f"expected_stats_pitchers_{year}.csv"
-    raise ValueError(f"Unsupported savant kind: {kind}")
+        filename = f"expected_stats_batters_{year}.csv"
+    elif kind == "pitchers":
+        filename = f"expected_stats_pitchers_{year}.csv"
+    else:
+        raise ValueError(f"Unsupported savant kind: {kind}")
+
+    preferred = _raw_root() / "savant" / filename
+    if preferred.exists():
+        return preferred
+
+    return _shared_raw_root() / "savant" / filename
 
 
 def _pick_lineup_file(as_of_date: str) -> Path:
@@ -112,6 +122,61 @@ def _pick_hitter_split_file_fa(as_of_date: str) -> Path:
 def _pick_recent7_file(as_of_date: str, variant: str = "roster") -> Path:
     suffix = "" if variant == "roster" else f"_{variant}"
     return _derived_root() / f"recent7_hitter_inputs{suffix}_{as_of_date}.csv"
+
+
+def fetch_hitter_slot_order(league_key: str, season_year: int) -> list[tuple[str, str]]:
+    default_slots = [
+        ("C", "C"),
+        ("1B", "1B"),
+        ("2B", "2B"),
+        ("3B", "3B"),
+        ("SS", "SS"),
+        ("IF", "IF"),
+        ("OF1", "OF"),
+        ("OF2", "OF"),
+        ("OF3", "OF"),
+        ("UTIL", "UTIL"),
+    ]
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT settings_json->'roster_positions'
+                FROM lineup_tool.league_profile
+                WHERE league_key = %s
+                  AND season_year = %s;
+            """, (league_key, season_year))
+            row = cur.fetchone()
+
+    positions = row[0] if row else None
+    if not positions:
+        return default_slots
+
+    hitter_types = {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
+    out: list[tuple[str, str]] = []
+    counts: dict[str, int] = {}
+
+    for raw in positions:
+        slot_type = str(raw or "").strip().upper()
+        if slot_type == "UTIL":
+            slot_type = "UTIL"
+
+        if slot_type not in hitter_types:
+            continue
+
+        counts[slot_type] = counts.get(slot_type, 0) + 1
+        n = counts[slot_type]
+
+        if slot_type == "OF":
+            slot_id = f"OF{n}"
+        elif slot_type == "UTIL":
+            slot_id = "UTIL" if n == 1 else f"UTIL{n}"
+        else:
+            slot_id = slot_type if n == 1 else f"{slot_type}{n}"
+
+        out.append((slot_id, slot_type))
+
+    return out or default_slots
 
 
 def _split_positions(value):
@@ -654,7 +719,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
 
 
 def _pick_true_free_agent_candidate_file(as_of_date: str) -> Path:
-    return Path(__file__).resolve().parents[1] / "data" / "derived" / f"true_free_agent_batters_{as_of_date}.csv"
+    return _derived_root() / f"true_free_agent_batters_{as_of_date}.csv"
 
 
 def _load_true_free_agent_candidate_keys(as_of_date: str) -> set[tuple[str, str]]:
