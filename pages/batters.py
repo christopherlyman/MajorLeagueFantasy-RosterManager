@@ -21,7 +21,9 @@ from services.queries import (
     resolve_as_of_date,
 )
 
-st.set_page_config(page_title="MLF Roster Manager", layout="wide")
+APP_DISPLAY_NAME = os.getenv("APP_DISPLAY_NAME", "MLF Roster Manager")
+
+st.set_page_config(page_title=APP_DISPLAY_NAME, layout="wide")
 
 
 def _read_env_file(path: str = "/app/.env") -> dict[str, str]:
@@ -50,8 +52,8 @@ def get_runtime_context() -> dict[str, str]:
     }
 
 
-STATUS_DIR = Path("/app/runtime/status")
-LOG_DIR = Path("/app/runtime/logs")
+STATUS_DIR = Path(os.getenv("RMT_STATUS_DIR", "/app/runtime/status"))
+LOG_DIR = Path(os.getenv("RMT_LOG_DIR", "/app/runtime/logs"))
 REFRESH_LABELS = {
     "quick": "Quick Refresh",
     "daily": "Daily Refresh",
@@ -756,7 +758,7 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
 
 ctx = get_runtime_context()
 
-st.title("MLF Roster Manager")
+st.title(APP_DISPLAY_NAME)
 
 if not (ctx.get("league_key") and ctx.get("team_key") and ctx.get("as_of_date")):
     st.error("Missing DEFAULT_LEAGUE_KEY / DEFAULT_TEAM_KEY in .env")

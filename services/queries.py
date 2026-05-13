@@ -77,11 +77,11 @@ def _season_year(as_of_date: str) -> int:
 
 
 def _raw_root() -> Path:
-    return Path("/app/data/raw")
+    return Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw"))
 
 
 def _derived_root() -> Path:
-    return Path("/app/data/derived")
+    return Path(os.environ.get("RMT_DERIVED_ROOT", "/app/data/derived"))
 
 
 def _pick_savant_file(kind: str, year: int) -> Path:

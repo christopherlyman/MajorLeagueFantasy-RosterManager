@@ -1,6 +1,9 @@
+import os
 import streamlit as st
 
-st.set_page_config(page_title="MLF Roster Manager - Pitchers", layout="wide")
+APP_DISPLAY_NAME = os.getenv("APP_DISPLAY_NAME", "MLF Roster Manager")
+
+st.set_page_config(page_title=f"{APP_DISPLAY_NAME} - Pitchers", layout="wide")
 
 st.title("Pitchers")
 
