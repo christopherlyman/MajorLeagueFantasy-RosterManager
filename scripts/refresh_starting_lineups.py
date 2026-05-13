@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 from pathlib import Path
 
 import requests
@@ -60,8 +61,8 @@ def main():
 
     as_of_date = args.as_of_date
 
-    raw_dir = Path("/app/data/raw/mlb")
-    derived_dir = Path("/app/data/derived")
+    raw_dir = Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw")) / "mlb"
+    derived_dir = Path(os.environ.get("RMT_DERIVED_ROOT", "/app/data/derived"))
     raw_dir.mkdir(parents=True, exist_ok=True)
     derived_dir.mkdir(parents=True, exist_ok=True)
 

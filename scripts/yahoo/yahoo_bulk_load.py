@@ -15,7 +15,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent))
 from auth import get_access_token
 
 YAHOO_FANTASY_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
-OUT_DIR = Path("data/raw/yahoo")
+OUT_DIR = Path(os.environ.get("YAHOO_RAW_OUT_DIR", Path(os.environ.get("RMT_RAW_ROOT", "data/raw")) / "yahoo"))
 
 
 # ----------------------------

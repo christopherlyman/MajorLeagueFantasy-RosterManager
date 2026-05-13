@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 import html
 import re
 import requests
@@ -82,7 +83,7 @@ def main():
     args = parser.parse_args()
 
     out_path = Path(args.out)
-    raw_dir = Path("/app/data/raw/yahoo") / f"splits_{args.as_of_date}"
+    raw_dir = Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw")) / "yahoo" / f"splits_{args.as_of_date}"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     roster = fetch_batter_roster(args.as_of_date, args.league_key, args.team_key)

@@ -7,7 +7,7 @@ from pathlib import Path
 from auth import get_access_token
 
 YAHOO_FANTASY_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
-OUT_DIR = Path("/app/data/raw/yahoo")
+OUT_DIR = Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw")) / "yahoo"
 
 def main():
     team_key = os.environ.get("YAHOO_TEAM_KEY")

@@ -389,7 +389,8 @@ def main():
     if refresh_mode not in valid_modes:
         raise SystemExit(f"Invalid PLAYER_POOL_REFRESH_MODE={refresh_mode!r}; expected one of {sorted(valid_modes)}")
 
-    out_dir = Path(os.environ.get("YAHOO_RAW_OUT_DIR", "data/raw/yahoo/"))
+    default_raw_out_dir = Path(os.environ.get("RMT_RAW_ROOT", "data/raw")) / "yahoo"
+    out_dir = Path(os.environ.get("YAHOO_RAW_OUT_DIR", default_raw_out_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     token = get_access_token()

@@ -20,8 +20,8 @@ STAT_ID_SB = "16"
 STAT_ID_K = "21"
 STAT_ID_AVG = "3"
 
-RAW_DIR = Path("/app/data/raw/yahoo")
-DERIVED_DIR = Path("/app/data/derived")
+RAW_DIR = Path(os.environ.get("RMT_RAW_ROOT", "/app/data/raw")) / "yahoo"
+DERIVED_DIR = Path(os.environ.get("RMT_DERIVED_ROOT", "/app/data/derived"))
 
 
 def _safe_avg_num(value):
