@@ -1,4 +1,4 @@
-﻿.env
+.env
 .env.*
 !.env.example
 __pycache__/
@@ -37,3 +37,15 @@ data/derived/
 
 # Generated Yahoo probe/script data
 scripts/yahoo/data/
+# Instance-local secrets and generated artifacts
+instances/*/.env
+instances/*/.env.*
+!instances/*/.env.example
+instances/*/data/raw/**
+instances/*/data/derived/**
+instances/*/logs/**
+instances/*/status/**
+!instances/*/data/raw/.gitkeep
+!instances/*/data/derived/.gitkeep
+!instances/*/logs/.gitkeep
+!instances/*/status/.gitkeep
