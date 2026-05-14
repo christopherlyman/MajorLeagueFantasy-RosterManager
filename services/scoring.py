@@ -287,6 +287,11 @@ def compute_recent_form_points(row: Mapping[str, Any]) -> float:
     hits = _num(row.get("recent7_hits"))
     ab = _num(row.get("recent7_ab"))
 
+    # Current Yahoo recent inputs do not reliably populate H/AB/AVG.
+    # When AB is missing/zero, treat recent form as unknown instead of cold.
+    if ab <= 0:
+        return 0.0
+
     scores = [
         _baseline_delta_score(r, LEAGUE7_R_BASELINE, True),
         _baseline_delta_score(hr, LEAGUE7_HR_BASELINE, True),
@@ -295,8 +300,7 @@ def compute_recent_form_points(row: Mapping[str, Any]) -> float:
         _baseline_delta_score(k, LEAGUE7_K_BASELINE, False),
     ]
 
-    # Only include AVG when we have real H and AB
-    if ab > 0 and hits >= 0:
+    if hits >= 0:
         expected_hits = LEAGUE_AVG_BASELINE * ab
         avg_score = _clamp((hits - expected_hits) / max(2.0, expected_hits), -1.0, 1.0)
         scores.append(avg_score)
