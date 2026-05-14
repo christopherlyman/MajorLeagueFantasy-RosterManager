@@ -12,7 +12,9 @@ sys.path.insert(0, "/app")
 from auth import get_access_token
 from services.db import get_connection
 
-STAT_ID_HAB = "60"   # H/AB, e.g. "1/4"
+STAT_ID_HAB = "60"   # Legacy H/AB shape, if Yahoo ever returns it.
+STAT_ID_AB = "6"
+STAT_ID_H = "8"
 STAT_ID_R = "7"
 STAT_ID_HR = "12"
 STAT_ID_RBI = "13"
@@ -34,8 +36,19 @@ def _safe_avg_num(value):
         return None
 
 
-def _stat_map_to_cache_row(stat_map: dict):
+def _hits_ab_from_stat_map(stat_map: dict) -> tuple[int, int]:
     hits, ab = parse_hab(stat_map.get(STAT_ID_HAB, ""))
+
+    if ab <= 0:
+        ab = to_int(stat_map.get(STAT_ID_AB, 0))
+    if hits <= 0:
+        hits = to_int(stat_map.get(STAT_ID_H, 0))
+
+    return hits, ab
+
+
+def _stat_map_to_cache_row(stat_map: dict):
+    hits, ab = _hits_ab_from_stat_map(stat_map)
     return {
         "hits": hits,
         "ab": ab,
@@ -58,6 +71,8 @@ def _cache_row_to_stat_map(row):
 
     return {
         STAT_ID_HAB: hab,
+        STAT_ID_AB: str(ab or 0),
+        STAT_ID_H: str(hits or 0),
         STAT_ID_R: str(r or 0),
         STAT_ID_HR: str(hr or 0),
         STAT_ID_RBI: str(rbi or 0),
@@ -288,7 +303,7 @@ def main():
             for stat_date in dates:
                 stat_map = get_player_daily_stats(session, headers, player_key, stat_date)
 
-                d_hits, d_ab = parse_hab(stat_map.get(STAT_ID_HAB, ""))
+                d_hits, d_ab = _hits_ab_from_stat_map(stat_map)
                 hits += d_hits
                 ab += d_ab
                 r += to_int(stat_map.get(STAT_ID_R, 0))
