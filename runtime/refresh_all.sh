@@ -8,13 +8,19 @@ else
 fi
 APP_CONTAINER="${RMT_CONTAINER_NAME:-usual-rmt}"
 LIVE_SCRIPT="$ROOT/runtime/refresh_live.sh"
-ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+if [[ -n "${RMT_ENV_FILE:-}" ]]; then
+  ENV_FILE="$RMT_ENV_FILE"
+elif [[ -d "/app/runtime" && -n "${APP_ALIAS:-}" && -f "/app/instances/${APP_ALIAS}/.env" ]]; then
+  ENV_FILE="/app/instances/${APP_ALIAS}/.env"
+else
+  ENV_FILE="$ROOT/.env"
+fi
 LOG_DIR="${RMT_LOG_DIR:-$ROOT/runtime/logs}"
 STATUS_DIR="${RMT_STATUS_DIR:-$ROOT/runtime/status}"
 APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
 APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
-HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
-HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-${RMT_RAW_ROOT:-$ROOT/data/raw}}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-${RMT_DERIVED_ROOT:-$ROOT/data/derived}}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 MODE="${REFRESH_ALL_MODE:-full}"
 

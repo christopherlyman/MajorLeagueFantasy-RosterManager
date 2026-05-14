@@ -7,13 +7,19 @@ else
   ROOT="${RMT_PROJECT_ROOT:-/Volume1/Bots/fantasy/mlf_roster_manager}"
 fi
 APP_CONTAINER="${RMT_CONTAINER_NAME:-usual-rmt}"
-ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+if [[ -n "${RMT_ENV_FILE:-}" ]]; then
+  ENV_FILE="$RMT_ENV_FILE"
+elif [[ -d "/app/runtime" && -n "${APP_ALIAS:-}" && -f "/app/instances/${APP_ALIAS}/.env" ]]; then
+  ENV_FILE="/app/instances/${APP_ALIAS}/.env"
+else
+  ENV_FILE="$ROOT/.env"
+fi
 LOG_DIR="${RMT_LOG_DIR:-$ROOT/runtime/logs}"
 STATUS_DIR="${RMT_STATUS_DIR:-$ROOT/runtime/status}"
 APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
 APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
-HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
-HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-${RMT_RAW_ROOT:-$ROOT/data/raw}}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-${RMT_DERIVED_ROOT:-$ROOT/data/derived}}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 
 mkdir -p "$LOG_DIR" "$STATUS_DIR"
@@ -92,32 +98,9 @@ SAFE_TEAM_KEY=${TEAM_KEY//./_}
 [[ -n "$LEAGUE_KEY" ]] || fail "DEFAULT_LEAGUE_KEY missing"
 [[ -n "$TEAM_KEY" ]] || fail "DEFAULT_TEAM_KEY missing"
 
-stage "SET DEFAULT_AS_OF_DATE=$TODAY"
-python3 - "$ENV_FILE" "$TODAY" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-today = sys.argv[2]
-
-lines = path.read_text(encoding="utf-8").splitlines()
-out = []
-found = False
-
-for line in lines:
-    if line.startswith("DEFAULT_AS_OF_DATE="):
-        out.append(f"DEFAULT_AS_OF_DATE={today}")
-        found = True
-    else:
-        out.append(line)
-
-if not found:
-    out.append(f"DEFAULT_AS_OF_DATE={today}")
-
-path.write_text("\n".join(out) + "\n", encoding="utf-8")
-print(f"UPDATED {path}")
-print(f"DEFAULT_AS_OF_DATE={today}")
-PY
+stage "RESOLVE ACTIVE DATE"
+echo "AS_OF_DATE=$TODAY"
+echo "ENV_FILE=$ENV_FILE"
 
 stage "REFRESH YAHOO ROSTER JSON"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "

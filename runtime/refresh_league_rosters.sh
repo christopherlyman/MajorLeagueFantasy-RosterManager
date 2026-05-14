@@ -8,11 +8,17 @@ else
 fi
 
 APP_CONTAINER="${RMT_CONTAINER_NAME:-usual-rmt}"
-ENV_FILE="${RMT_ENV_FILE:-$ROOT/.env}"
+if [[ -n "${RMT_ENV_FILE:-}" ]]; then
+  ENV_FILE="$RMT_ENV_FILE"
+elif [[ -d "/app/runtime" && -n "${APP_ALIAS:-}" && -f "/app/instances/${APP_ALIAS}/.env" ]]; then
+  ENV_FILE="/app/instances/${APP_ALIAS}/.env"
+else
+  ENV_FILE="$ROOT/.env"
+fi
 APP_RAW_ROOT="${RMT_RAW_ROOT:-/app/data/raw}"
 APP_DERIVED_ROOT="${RMT_DERIVED_ROOT:-/app/data/derived}"
-HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-$ROOT/data/raw}"
-HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-$ROOT/data/derived}"
+HOST_RAW_ROOT="${RMT_HOST_RAW_ROOT:-${RMT_RAW_ROOT:-$ROOT/data/raw}}"
+HOST_DERIVED_ROOT="${RMT_HOST_DERIVED_ROOT:-${RMT_DERIVED_ROOT:-$ROOT/data/derived}}"
 TODAY="${1:-$(TZ=America/New_York date +%F)}"
 
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
