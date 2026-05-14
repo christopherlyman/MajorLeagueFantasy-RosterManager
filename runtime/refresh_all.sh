@@ -374,7 +374,7 @@ def rank_owned_ok(row, meta):
     except Exception:
         owned = 0.0
 
-    return rank <= 600 and owned > 0
+    return rank <= 600 or owned > 0
 
 
 yahoo_rows = fetch_yahoo_free_agents()
@@ -385,11 +385,25 @@ if mode == "daily":
     game_teams, meta = load_daily_context()
     rows = [
         r for r in active_batter_rows
-        if r["editorial_team_abbr"] in game_teams and rank_owned_ok(r, meta)
+        if rank_owned_ok(r, meta)
     ]
+
+    def fa_sort_key(row):
+        m = meta.get(row["yahoo_player_key"], {})
+        try:
+            rank = float(m.get("rank")) if m.get("rank") is not None else 999999.0
+        except Exception:
+            rank = 999999.0
+        try:
+            owned = float(row.get("percent_owned_yahoo")) if row.get("percent_owned_yahoo") is not None else float(m.get("owned") or 0)
+        except Exception:
+            owned = 0.0
+        return (rank, -owned, row.get("player_name") or "")
+
+    rows = sorted(rows, key=fa_sort_key)[:100]
 else:
     game_teams, meta = set(), {}
-    rows = active_batter_rows
+    rows = active_batter_rows[:100]
 
 out.parent.mkdir(parents=True, exist_ok=True)
 with out.open("w", newline="", encoding="utf-8") as f:
