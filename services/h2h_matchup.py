@@ -263,6 +263,27 @@ def _weights(league_key: str, team_key: str, as_of_date: str, app_alias: str) ->
     return out
 
 
+def _has_recent_profile(row: Mapping[str, Any]) -> bool:
+    # Blank recent fields mean the row did not join to the current-date recent7 CSV.
+    # A real recent profile can legitimately contain zeros, so "0" counts as present.
+    keys = [
+        "recent7_r",
+        "recent7_hr",
+        "recent7_rbi",
+        "recent7_sb",
+        "recent7_bb",
+        "recent7_k",
+        "recent7_hits",
+        "recent7_ab",
+        "recent7_avg",
+    ]
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip() != "":
+            return True
+    return False
+
+
 def _player_component(row: Mapping[str, Any], cat: str) -> float:
     if cat in {"R", "HR", "RBI", "SB", "BB"}:
         avg, sd = CATEGORY_BASELINES[cat]
@@ -284,6 +305,8 @@ def _player_component(row: Mapping[str, Any], cat: str) -> float:
 
 def _eligible_for_h2h(row: Mapping[str, Any], score: Mapping[str, Any]) -> bool:
     if int(score.get("ranking") or 0) <= 0:
+        return False
+    if not _has_recent_profile(row):
         return False
     if _float(score.get("lineup_points")) <= -30.0:
         return False
