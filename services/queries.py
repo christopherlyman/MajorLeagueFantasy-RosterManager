@@ -707,6 +707,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         r["recent7_hr"] = recent_row.get("recent7_hr", "")
         r["recent7_rbi"] = recent_row.get("recent7_rbi", "")
         r["recent7_sb"] = recent_row.get("recent7_sb", "")
+        r["recent7_bb"] = recent_row.get("recent7_bb", "")
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)
@@ -922,6 +923,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         r["recent7_hr"] = recent_row.get("recent7_hr", "")
         r["recent7_rbi"] = recent_row.get("recent7_rbi", "")
         r["recent7_sb"] = recent_row.get("recent7_sb", "")
+        r["recent7_bb"] = recent_row.get("recent7_bb", "")
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)

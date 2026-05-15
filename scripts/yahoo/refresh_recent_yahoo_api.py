@@ -19,6 +19,7 @@ STAT_ID_R = "7"
 STAT_ID_HR = "12"
 STAT_ID_RBI = "13"
 STAT_ID_SB = "16"
+STAT_ID_BB = "18"
 STAT_ID_K = "21"
 STAT_ID_AVG = "3"
 
@@ -56,6 +57,7 @@ def _stat_map_to_cache_row(stat_map: dict):
         "hr": to_int(stat_map.get(STAT_ID_HR, 0)),
         "rbi": to_int(stat_map.get(STAT_ID_RBI, 0)),
         "sb": to_int(stat_map.get(STAT_ID_SB, 0)),
+        "bb": to_int(stat_map.get(STAT_ID_BB, 0)),
         "k": to_int(stat_map.get(STAT_ID_K, 0)),
         "avg": _safe_avg_num(stat_map.get(STAT_ID_AVG, "")),
     }
@@ -65,7 +67,7 @@ def _cache_row_to_stat_map(row):
     if row is None:
         return None
 
-    hits, ab, r, hr, rbi, sb, k, avg = row
+    hits, ab, r, hr, rbi, sb, bb, k, avg = row
     hab = f"{hits}/{ab}" if hits or ab else ""
     avg_text = "" if avg is None else f"{float(avg):.3f}"
 
@@ -77,6 +79,7 @@ def _cache_row_to_stat_map(row):
         STAT_ID_HR: str(hr or 0),
         STAT_ID_RBI: str(rbi or 0),
         STAT_ID_SB: str(sb or 0),
+        STAT_ID_BB: str(bb or 0),
         STAT_ID_K: str(k or 0),
         STAT_ID_AVG: avg_text,
     }
@@ -84,7 +87,7 @@ def _cache_row_to_stat_map(row):
 
 def _get_cached_daily_stats(player_key: str, stat_date: str):
     sql = """
-    SELECT hits, ab, r, hr, rbi, sb, k, avg
+    SELECT hits, ab, r, hr, rbi, sb, bb, k, avg
     FROM rmt.yahoo_batter_daily_stat_cache
     WHERE yahoo_player_key = %s
       AND stat_date = %s
@@ -101,9 +104,9 @@ def _put_cached_daily_stats(player_key: str, stat_date: str, stat_map: dict):
     row = _stat_map_to_cache_row(stat_map)
     sql = """
     INSERT INTO rmt.yahoo_batter_daily_stat_cache (
-        yahoo_player_key, stat_date, hits, ab, r, hr, rbi, sb, k, avg, fetch_status, response_excerpt
+        yahoo_player_key, stat_date, hits, ab, r, hr, rbi, sb, bb, k, avg, fetch_status, response_excerpt
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'success', NULL)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'success', NULL)
     ON CONFLICT (yahoo_player_key, stat_date)
     DO UPDATE SET
         hits = EXCLUDED.hits,
@@ -112,6 +115,7 @@ def _put_cached_daily_stats(player_key: str, stat_date: str, stat_map: dict):
         hr = EXCLUDED.hr,
         rbi = EXCLUDED.rbi,
         sb = EXCLUDED.sb,
+        bb = EXCLUDED.bb,
         k = EXCLUDED.k,
         avg = EXCLUDED.avg,
         fetch_status = EXCLUDED.fetch_status,
@@ -131,6 +135,7 @@ def _put_cached_daily_stats(player_key: str, stat_date: str, stat_map: dict):
                     row["hr"],
                     row["rbi"],
                     row["sb"],
+                    row["bb"],
                     row["k"],
                     row["avg"],
                 ),
@@ -298,6 +303,7 @@ def main():
             hr = 0
             rbi = 0
             sb = 0
+            bb = 0
             k = 0
 
             for stat_date in dates:
@@ -310,6 +316,7 @@ def main():
                 hr += to_int(stat_map.get(STAT_ID_HR, 0))
                 rbi += to_int(stat_map.get(STAT_ID_RBI, 0))
                 sb += to_int(stat_map.get(STAT_ID_SB, 0))
+                bb += to_int(stat_map.get(STAT_ID_BB, 0))
                 k += to_int(stat_map.get(STAT_ID_K, 0))
 
             avg = f"{(hits / ab):.3f}" if ab > 0 else ""
@@ -323,6 +330,7 @@ def main():
                     "recent7_hr": hr,
                     "recent7_rbi": rbi,
                     "recent7_sb": sb,
+                    "recent7_bb": bb,
                     "recent7_k": k,
                     "recent7_avg": avg,
                 }
@@ -339,6 +347,7 @@ def main():
                 "recent7_hr",
                 "recent7_rbi",
                 "recent7_sb",
+                "recent7_bb",
                 "recent7_k",
                 "recent7_avg",
             ],
@@ -356,6 +365,7 @@ def main():
             row["recent7_hr"],
             row["recent7_rbi"],
             row["recent7_sb"],
+            row["recent7_bb"],
             row["recent7_k"],
             row["recent7_avg"],
             sep=" | "
