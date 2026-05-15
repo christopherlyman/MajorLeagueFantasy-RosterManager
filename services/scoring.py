@@ -370,6 +370,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
     recent_form_points = compute_recent_form_points(row)
     status_risk_points = compute_status_risk_points(row)
     lineup_points = compute_lineup_points(row)
+    status_points = status_risk_points + lineup_points
 
     ranking = _clamp(
         NEUTRAL_RANKING
@@ -392,8 +393,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         f"Home/Away {home_away_points:+.1f}",
         f"Day/Night {day_night_points:+.1f}",
         f"Recent {recent_form_points:+.1f}",
-        f"Status {status_risk_points:+.1f}",
-        f"Lineup {lineup_points:+.1f}",
+        f"Status {status_points:+.1f}",
     ]
     if str(row.get("game_status") or "").strip().upper() == "GAME_DATA_MISSING":
         note_parts.append("Game data missing")

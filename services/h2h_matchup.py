@@ -349,5 +349,13 @@ def apply_h2h_matchup_score(
 
     note = str(out.get("note_short") or "")
     h2h_note = f"H2H {h2h_points:+.1f}"
-    out["note_short"] = f"{note} | {h2h_note}" if note else h2h_note
+
+    # Keep Status last because it is the most day-sensitive display modifier.
+    marker = " | Status "
+    if marker in note:
+        prefix, suffix = note.rsplit(marker, 1)
+        out["note_short"] = f"{prefix} | {h2h_note}{marker}{suffix}"
+    else:
+        out["note_short"] = f"{note} | {h2h_note}" if note else h2h_note
+
     return out
