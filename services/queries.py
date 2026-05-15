@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from services.db import get_connection
 from services.scoring import compute_usual_suspects_batter_ranking, ranking_band, START_WORTHY_THRESHOLD, MIN_RANKING, MAX_RANKING
+from services.h2h_matchup import apply_h2h_matchup_score
 
 SLOT_ORDER = {
     "C": 1,
@@ -711,6 +712,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)
+        score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
 
     rows = _collapse_scored_player_day_rows(rows)
@@ -927,6 +929,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)
+        score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
         r["comparison_delta"] = ""
 
