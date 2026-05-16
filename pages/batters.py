@@ -63,6 +63,42 @@ REFRESH_LABELS = {
 }
 
 
+BATTER_LINEUP_COLUMN_CONFIG = {
+    "Slot": st.column_config.TextColumn("Slot"),
+    "Threshold": st.column_config.TextColumn("Threshold"),
+    "Player": st.column_config.TextColumn("Player"),
+    "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
+    "Rank": st.column_config.TextColumn("Rank"),
+    "Band": st.column_config.TextColumn("Band"),
+    "Game": st.column_config.TextColumn("Game"),
+    "Lineup": st.column_config.TextColumn("Lineup"),
+    "Status": st.column_config.TextColumn("Status"),
+    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+}
+
+BATTER_SLOT_COLUMN_CONFIG = {
+    "Player": st.column_config.TextColumn("Player"),
+    "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
+    "Eligible": st.column_config.TextColumn("Eligible"),
+    "Rank": st.column_config.TextColumn("Rank"),
+    "Band": st.column_config.TextColumn("Band"),
+    "Game": st.column_config.TextColumn("Game"),
+    "Lineup": st.column_config.TextColumn("Lineup"),
+    "Status": st.column_config.TextColumn("Status"),
+    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+}
+
+BATTER_FA_COLUMN_CONFIG = {
+    "Player": st.column_config.TextColumn("Player"),
+    "Eligible": st.column_config.TextColumn("Eligible"),
+    "Rank": st.column_config.TextColumn("Rank"),
+    "Game": st.column_config.TextColumn("Game"),
+    "Lineup": st.column_config.TextColumn("Lineup"),
+    "Status": st.column_config.TextColumn("Status"),
+    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+}
+
+
 def build_refresh_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
 
@@ -1061,10 +1097,7 @@ with tab_lineup:
         width="stretch",
         height=roster_table_height,
         hide_index=True,
-        column_config={
-            "Rank": st.column_config.TextColumn("Rank", alignment="left"),
-            "Threshold": st.column_config.TextColumn("Threshold", alignment="left"),
-        },
+        column_config=BATTER_LINEUP_COLUMN_CONFIG,
     )
 
 with tab_slots:
@@ -1074,8 +1107,9 @@ with tab_slots:
         st.subheader(slot_label(slot_id, slot_type))
         st.dataframe(
             build_slot_table(slot_id, slot_type, active_rows, chosen_name),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
+            column_config=BATTER_SLOT_COLUMN_CONFIG,
         )
 
 with tab_fa:
@@ -1122,7 +1156,12 @@ with tab_fa:
                     "Rank Reason": compress_rank_reason(r.get("note_short", "")),
                 }
             )
-        st.dataframe(fa_rows, use_container_width=True, hide_index=True)
+        st.dataframe(
+            fa_rows,
+            width="stretch",
+            hide_index=True,
+            column_config=BATTER_FA_COLUMN_CONFIG,
+        )
 
 st.divider()
-st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | S=Status | L=Lineup")
+st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | H2H=Matchup | S=Status")
