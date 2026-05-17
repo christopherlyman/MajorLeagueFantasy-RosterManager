@@ -117,6 +117,50 @@ stage "REFRESH ALL: LIVE PIPELINE"
 stage "REFRESH ALL: LEAGUE ROSTERS"
 "$ROOT/runtime/refresh_league_rosters.sh" "$TODAY"
 
+stage "REFRESH ALL: PITCHER FA CANDIDATES"
+docker exec -i \
+  -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
+  -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
+  -e DEFAULT_AS_OF_DATE="$TODAY" \
+  -e RMT_PITCHER_FA_LEAGUE_KEY="$LEAGUE_KEY" \
+  -e RMT_PITCHER_FA_MAX="${RMT_PITCHER_FA_MAX:-100}" \
+  -e RMT_PITCHER_FA_OUT="$APP_DERIVED_ROOT/true_free_agent_pitchers_${TODAY}.csv" \
+  -e RMT_PITCHER_KEYSET_OUT="$APP_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt" \
+  "$APP_CONTAINER" bash -lc "cd /app && PYTHONPATH=/app python scripts/yahoo/refresh_pitcher_candidates.py"
+
+docker cp \
+  "${APP_CONTAINER}:$APP_DERIVED_ROOT/true_free_agent_pitchers_${TODAY}.csv" \
+  "$HOST_DERIVED_ROOT/true_free_agent_pitchers_${TODAY}.csv"
+
+docker cp \
+  "${APP_CONTAINER}:$APP_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt" \
+  "$HOST_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt"
+
+stage "REFRESH ALL: PITCHER CANDIDATE SEASON STATS"
+docker exec -i \
+  -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
+  -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
+  "$APP_CONTAINER" bash -lc "
+PITCHER_KEYS=\$(cat $APP_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt 2>/dev/null || true)
+
+if [[ -z \"\$PITCHER_KEYS\" ]]; then
+  echo \"NO_PITCHER_KEYS_FOUND\"
+else
+  echo \"PITCHER_KEYS=\$(echo \"\$PITCHER_KEYS\" | tr ',' '\\n' | wc -l)\"
+  cd /app/scripts/yahoo && \
+  YAHOO_LEAGUE_KEY=$LEAGUE_KEY \
+  YAHOO_STATS_SEASON=${TODAY:0:4} \
+  YAHOO_GAME_KEY=469 \
+  YAHOO_BATCH_SIZE=25 \
+  YAHOO_SLEEP_SECONDS=0 \
+  YAHOO_FETCH_META=false \
+  YAHOO_WRITE_RAW=false \
+  YAHOO_PLAYER_KEYS=\"\$PITCHER_KEYS\" \
+  POSTGRES_DSN=\${POSTGRES_DSN:-\$MLF_POSTGRES_DSN} \
+  python yahoo_bulk_load.py
+fi
+"
+
 if [[ "$MODE" == "full" || "$MODE" == "deep" ]]; then
   stage "REFRESH ALL: YAHOO PLAYER POOL"
 

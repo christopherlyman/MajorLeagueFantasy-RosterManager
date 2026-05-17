@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-from services.pitcher_queries import fetch_owned_pitcher_rows
+from services.pitcher_queries import fetch_available_pitcher_rows, fetch_owned_pitcher_rows
 from services.queries import get_default_context
 
 
@@ -145,6 +145,12 @@ owned_pitchers = fetch_owned_pitcher_rows(
     ctx["as_of_date"],
 )
 
+available_pitchers = fetch_available_pitcher_rows(
+    ctx["league_key"],
+    ctx["team_key"],
+    ctx["as_of_date"],
+)
+
 tab_lineup, tab_slots, tab_fa = st.tabs(
     ["Starting Lineup", "Slots", "Pitcher Free Agents"]
 )
@@ -164,7 +170,7 @@ with tab_lineup:
 
     st.dataframe(
         pitcher_styler,
-        width="stretch",
+        width="content",
         height=table_height,
         hide_index=True,
         column_config=PITCHER_LINEUP_COLUMN_CONFIG,
@@ -176,10 +182,25 @@ with tab_slots:
 
 with tab_fa:
     st.subheader("Pitcher Free Agents")
-    st.info(
-        "Pitcher free-agent recommendations will compare available SP spot starts "
-        "and RP saves/holds candidates after the owned pitcher ranking model is accepted."
+    st.caption(
+        "Ranks active Yahoo-available pitcher candidates from the Daily Refresh candidate pool."
     )
+
+    fa_rows = build_pitcher_table(available_pitchers)
+    if not fa_rows:
+        st.info("No pitcher free-agent candidate file found yet. Run Daily Refresh.")
+    else:
+        fa_df = pd.DataFrame(fa_rows)
+        fa_styler = fa_df.style.apply(_style_pitcher_row, axis=1)
+        fa_height = max(420, 35 * (len(fa_rows) + 1) + 3)
+
+        st.dataframe(
+            fa_styler,
+            width="content",
+            height=fa_height,
+            hide_index=True,
+            column_config=PITCHER_LINEUP_COLUMN_CONFIG,
+        )
 
 st.divider()
 

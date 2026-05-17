@@ -457,15 +457,24 @@ def main():
         conn.autocommit = True
         ensure_tables(conn)
 
-        rows = conn.execute(
-            "SELECT yahoo_player_key FROM yahoo_player WHERE source_game_key=%s ORDER BY yahoo_player_key",
-            (str(game_key),)
-        ).fetchall()
+        player_keys_env = os.environ.get("YAHOO_PLAYER_KEYS", "").strip()
 
-        player_universe = [r[0] for r in rows]
+        if player_keys_env:
+            player_universe = sorted({
+                key.strip()
+                for key in player_keys_env.split(',')
+                if key.strip()
+            })
+            print(f"Players to process (YAHOO_PLAYER_KEYS): {len(player_universe)}")
+        else:
+            rows = conn.execute(
+                "SELECT yahoo_player_key FROM yahoo_player WHERE source_game_key=%s ORDER BY yahoo_player_key",
+                (str(game_key),)
+            ).fetchall()
+            player_universe = [r[0] for r in rows]
+            print(f"Players to process (source_game_key={game_key}): {len(player_universe)}")
+
         total = len(player_universe)
-
-        print(f"Players to process (source_game_key={game_key}): {total}")
         if total == 0:
             return
 

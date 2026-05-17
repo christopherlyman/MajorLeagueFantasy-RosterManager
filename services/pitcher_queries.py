@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import csv
 import os
+from pathlib import Path
 from typing import Any
 
 from services.db import get_connection
 from services.pitcher_scoring import score_pitcher
+from services.queries import _derived_root
 
 
 def _app_alias() -> str:
@@ -137,5 +140,104 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
 
     for row in rows:
         row.update(score_pitcher(row, app_alias))
+
+    return rows
+
+
+def _split_eligible_positions(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(x) for x in value if x]
+    return [part.strip() for part in str(value or "").replace(",", "|").split("|") if part.strip()]
+
+
+def fetch_available_pitcher_rows(league_key: str, team_key: str, as_of_date: str) -> list[dict[str, Any]]:
+    app_alias = _app_alias()
+    season_year = int(str(as_of_date)[:4])
+    candidate_file = _derived_root() / f"true_free_agent_pitchers_{as_of_date}.csv"
+
+    if not candidate_file.exists():
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    with candidate_file.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            pkey = (row.get("yahoo_player_key") or "").strip()
+            if not pkey:
+                continue
+
+            candidates.append(
+                {
+                    "selected_position": "FA",
+                    "full_name": row.get("player_name", ""),
+                    "yahoo_player_key": pkey,
+                    "mlb_team_abbr": row.get("editorial_team_abbr", ""),
+                    "primary_position": "",
+                    "eligible_positions": _split_eligible_positions(row.get("eligible_positions", "")),
+                    "status": row.get("status", ""),
+                    "status_full": row.get("status_full", ""),
+                    "percent_owned_yahoo": row.get("percent_owned_yahoo", ""),
+                    "yahoo_rank": row.get("yahoo_rank", ""),
+                }
+            )
+
+    if not candidates:
+        return []
+
+    by_key = {row["yahoo_player_key"]: row for row in candidates}
+    player_keys = list(by_key.keys())
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if app_alias == "usual-rmt":
+                cur.execute("""
+                    SELECT
+                        yahoo_player_key,
+                        max(value_num) FILTER (WHERE stat_id = 26) AS era,
+                        max(value_num) FILTER (WHERE stat_id = 27) AS whip,
+                        max(value_num) FILTER (WHERE stat_id = 28) AS w,
+                        max(value_num) FILTER (WHERE stat_id = 32) AS sv,
+                        max(value_num) FILTER (WHERE stat_id = 42) AS k_pit,
+                        max(value_num) FILTER (WHERE stat_id = 48) AS hld,
+                        max(value_num) FILTER (WHERE stat_id = 50) AS ip
+                    FROM public.yahoo_player_league_season_stat
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND yahoo_player_key = ANY(%s)
+                    GROUP BY yahoo_player_key;
+                """, (league_key, season_year, player_keys))
+            else:
+                cur.execute("""
+                    SELECT
+                        yahoo_player_key,
+                        max(value_num) FILTER (WHERE stat_id = 26) AS era,
+                        max(value_num) FILTER (WHERE stat_id = 27) AS whip,
+                        max(value_num) FILTER (WHERE stat_id = 28) AS w,
+                        max(value_num) FILTER (WHERE stat_id = 42) AS k_pit,
+                        max(value_num) FILTER (WHERE stat_id = 49) AS tb,
+                        max(value_num) FILTER (WHERE stat_id = 50) AS ip,
+                        max(value_num) FILTER (WHERE stat_id = 83) AS qs,
+                        max(value_num) FILTER (WHERE stat_id = 89) AS sv_h
+                    FROM public.yahoo_player_league_season_stat
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND yahoo_player_key = ANY(%s)
+                    GROUP BY yahoo_player_key;
+                """, (league_key, season_year, player_keys))
+
+            columns = [desc[0] for desc in cur.description]
+            for db_row in cur.fetchall():
+                stat_row = dict(zip(columns, db_row))
+                by_key[stat_row["yahoo_player_key"]].update(stat_row)
+
+    rows = list(by_key.values())
+    for row in rows:
+        row.update(score_pitcher(row, app_alias))
+
+    rows.sort(
+        key=lambda r: (
+            -int(r.get("ranking") or 0),
+            str(r.get("full_name") or ""),
+        )
+    )
 
     return rows

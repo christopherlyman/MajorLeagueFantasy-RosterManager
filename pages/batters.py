@@ -1094,7 +1094,7 @@ with tab_lineup:
     roster_table_height = max(420, 35 * (len(combined_roster_rows) + 1) + 3)
     st.dataframe(
         combined_roster_styler,
-        width="stretch",
+        width="content",
         height=roster_table_height,
         hide_index=True,
         column_config=BATTER_LINEUP_COLUMN_CONFIG,
@@ -1107,7 +1107,7 @@ with tab_slots:
         st.subheader(slot_label(slot_id, slot_type))
         st.dataframe(
             build_slot_table(slot_id, slot_type, active_rows, chosen_name),
-            width="stretch",
+            width="content",
             hide_index=True,
             column_config=BATTER_SLOT_COLUMN_CONFIG,
         )
@@ -1158,7 +1158,7 @@ with tab_fa:
             )
         st.dataframe(
             fa_rows,
-            width="stretch",
+            width="content",
             hide_index=True,
             column_config=BATTER_FA_COLUMN_CONFIG,
         )
