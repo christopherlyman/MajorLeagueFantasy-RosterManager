@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import streamlit as st
 
+from views.shared_refresh import render_refresh_sidebar
+
 from services.pitcher_queries import fetch_available_pitcher_rows, fetch_owned_pitcher_rows
 from services.queries import get_default_context
 
@@ -134,6 +136,9 @@ def _style_pitcher_row(row):
 
 
 ctx = get_default_context()
+
+with st.sidebar:
+    render_refresh_sidebar(ctx)
 
 st.caption(
     f"League: {ctx['league_key']} | Team: {ctx['team_key']} | Active date: {ctx['as_of_date']}"
