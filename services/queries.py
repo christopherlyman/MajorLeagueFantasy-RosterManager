@@ -2,6 +2,7 @@ import csv
 import importlib.util
 import os
 import re
+from functools import lru_cache
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -127,6 +128,130 @@ def _pick_hitter_split_file_fa(as_of_date: str) -> Path:
 def _pick_recent7_file(as_of_date: str, variant: str = "roster") -> Path:
     suffix = "" if variant == "roster" else f"_{variant}"
     return _derived_root() / f"recent7_hitter_inputs{suffix}_{as_of_date}.csv"
+
+
+
+
+@lru_cache(maxsize=512)
+def _posted_lineup_names_for_team(stat_date: str, team_abbr: str) -> tuple[str, ...] | None:
+    team = str(team_abbr or "").strip().upper()
+    if not team:
+        return None
+
+    root = _derived_root()
+    teams_path = root / f"starting_lineup_teams_{stat_date}.csv"
+    players_path = root / f"starting_lineup_players_{stat_date}.csv"
+
+    if not teams_path.exists() or not players_path.exists():
+        return None
+
+    lineup_posted = False
+    with teams_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            if str(row.get("team_abbr") or "").strip().upper() != team:
+                continue
+            if str(row.get("lineup_posted") or "").strip().upper() == "Y":
+                lineup_posted = True
+                break
+
+    if not lineup_posted:
+        return None
+
+    names: list[str] = []
+    with players_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            if str(row.get("team_abbr") or "").strip().upper() != team:
+                continue
+            names.append(normalize_name(row.get("player_name", "")))
+
+    return tuple(name for name in names if name)
+
+
+def _hitter_recent_start_rate(row: dict, as_of_date: str) -> tuple[int, int, float | None]:
+    player_name = str(row.get("player_name") or row.get("full_name") or "").strip()
+    team = str(
+        row.get("mlb_team_abbr")
+        or row.get("editorial_team_abbr")
+        or ""
+    ).strip().upper()
+
+    if not player_name or not team:
+        return 0, 0, None
+
+    player_key = normalize_name(player_name)
+    active_day = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+
+    starts = 0
+    team_lineup_days = 0
+
+    for days_back in range(7, 0, -1):
+        stat_date = (active_day - timedelta(days=days_back)).isoformat()
+        posted_names = _posted_lineup_names_for_team(stat_date, team)
+
+        if posted_names is None:
+            continue
+
+        team_lineup_days += 1
+        if player_key in posted_names:
+            starts += 1
+
+    rate = starts / team_lineup_days if team_lineup_days else None
+    return starts, team_lineup_days, rate
+
+
+def _start_frequency_penalty(rate: float | None) -> int:
+    if rate is None:
+        return 0
+    if rate >= 0.80:
+        return 0
+    if rate >= 0.60:
+        return -1
+    if rate >= 0.40:
+        return -2
+    if rate >= 0.20:
+        return -3
+    return -5
+
+
+def _insert_rank_reason_before_status(note: str, new_part: str) -> str:
+    note = str(note or "")
+    marker = " | Status "
+
+    if marker in note:
+        prefix, suffix = note.rsplit(marker, 1)
+        return f"{prefix} | {new_part}{marker}{suffix}"
+
+    return f"{note} | {new_part}" if note else new_part
+
+
+def apply_start_frequency_penalty(row: dict, score: dict, as_of_date: str) -> dict:
+    if str(row.get("lineup_status") or "").strip().upper() != "LINEUP_NOT_CONFIRMED":
+        return score
+
+    if int(score.get("ranking") or 0) <= 0:
+        return score
+
+    starts, days, rate = _hitter_recent_start_rate(row, as_of_date)
+    penalty = _start_frequency_penalty(rate)
+
+    if penalty == 0:
+        return score
+
+    out = dict(score)
+    ranking = max(MIN_RANKING, min(MAX_RANKING, int(out.get("ranking") or 0) + penalty))
+
+    out["ranking"] = ranking
+    out["band"] = ranking_band(ranking)
+    out["start_frequency_starts"] = starts
+    out["start_frequency_days"] = days
+    out["start_frequency_rate"] = rate
+    out["start_frequency_points"] = penalty
+    out["note_short"] = _insert_rank_reason_before_status(
+        str(out.get("note_short") or ""),
+        f"Start% {penalty:+.1f}",
+    )
+
+    return out
 
 
 def fetch_hitter_slot_order(league_key: str, season_year: int) -> list[tuple[str, str]]:
@@ -716,6 +841,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)
+        score = apply_start_frequency_penalty(r, score, as_of_date)
         score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
 
@@ -933,6 +1059,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         r["recent7_k"] = recent_row.get("recent7_k", "")
 
         score = compute_usual_suspects_batter_ranking(r)
+        score = apply_start_frequency_penalty(r, score, as_of_date)
         score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
         r["comparison_delta"] = ""
