@@ -2,6 +2,7 @@ import csv
 import importlib.util
 import os
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,7 +36,10 @@ def _load_name_normalizer():
         return mod.normalize_name
 
     def fallback(value: str) -> str:
-        return " ".join(str(value or "").replace(".", "").replace(",", "").split()).lower()
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        return text
 
     return fallback
 
