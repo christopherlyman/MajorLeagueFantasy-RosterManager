@@ -2,7 +2,7 @@ import csv
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -85,9 +85,31 @@ def _cache_row_to_stat_map(row):
     }
 
 
+def _cached_daily_stats_is_final(stat_date: str, fetched_at_utc) -> bool:
+    """
+    Recent7 uses completed games only. A Yahoo daily row fetched before that
+    MLB date is finalized can be all-zero but still cached as success.
+    Trust cached daily rows only after 10:00 UTC the next calendar day.
+    """
+    if fetched_at_utc is None:
+        return False
+
+    stat_day = datetime.strptime(str(stat_date), "%Y-%m-%d").date()
+    final_after = datetime.combine(
+        stat_day + timedelta(days=1),
+        time(hour=10, minute=0),
+        tzinfo=timezone.utc,
+    )
+
+    if fetched_at_utc.tzinfo is None:
+        fetched_at_utc = fetched_at_utc.replace(tzinfo=timezone.utc)
+
+    return fetched_at_utc >= final_after
+
+
 def _get_cached_daily_stats(player_key: str, stat_date: str):
     sql = """
-    SELECT hits, ab, r, hr, rbi, sb, bb, k, avg
+    SELECT hits, ab, r, hr, rbi, sb, bb, k, avg, fetched_at_utc
     FROM rmt.yahoo_batter_daily_stat_cache
     WHERE yahoo_player_key = %s
       AND stat_date = %s
@@ -97,7 +119,16 @@ def _get_cached_daily_stats(player_key: str, stat_date: str):
         with conn.cursor() as cur:
             cur.execute(sql, (player_key, stat_date))
             row = cur.fetchone()
-    return _cache_row_to_stat_map(row)
+
+    if not row:
+        return None
+
+    *stat_values, fetched_at_utc = row
+
+    if not _cached_daily_stats_is_final(stat_date, fetched_at_utc):
+        return None
+
+    return _cache_row_to_stat_map(tuple(stat_values))
 
 
 def _put_cached_daily_stats(player_key: str, stat_date: str, stat_map: dict):
@@ -275,8 +306,12 @@ def main():
     players_csv = str(os.environ.get("YAHOO_PLAYERS_CSV", "")).strip()
     out_override = str(os.environ.get("YAHOO_RECENT_OUT", "")).strip()
 
-    dt = datetime.strptime(as_of_date, "%Y-%m-%d").date()
-    dates = [(dt - timedelta(days=i)).isoformat() for i in range(7)]
+    active_day = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    dates = [(active_day - timedelta(days=i)).isoformat() for i in range(7, 0, -1)]
+    print(
+        f"RECENT7_WINDOW {dates[0]}..{dates[-1]} "
+        f"active_date={as_of_date} excludes_active_date=true"
+    )
 
     DERIVED_DIR.mkdir(parents=True, exist_ok=True)
     out_path = Path(out_override) if out_override else (DERIVED_DIR / f"recent7_hitter_inputs_{as_of_date}.csv")
