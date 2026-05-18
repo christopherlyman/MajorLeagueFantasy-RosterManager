@@ -855,20 +855,46 @@ def _pick_true_free_agent_candidate_file(as_of_date: str) -> Path:
     return _derived_root() / f"true_free_agent_batters_{as_of_date}.csv"
 
 
-def _load_true_free_agent_candidate_keys(as_of_date: str) -> set[tuple[str, str]]:
+def _load_true_free_agent_candidate_rows(as_of_date: str) -> list[dict]:
     path = _pick_true_free_agent_candidate_file(as_of_date)
     if not path.exists():
-        return set()
+        return []
 
-    out: set[tuple[str, str]] = set()
+    out: list[dict] = []
     with path.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            player_key = str(row.get("yahoo_player_key") or "").strip()
             name = str(row.get("player_name") or "").strip()
             team = str(row.get("editorial_team_abbr") or "").strip().upper()
-            if name:
-                out.add((normalize_name(name), team))
+            if player_key and name:
+                out.append(
+                    {
+                        "yahoo_player_key": player_key,
+                        "player_name": name,
+                        "editorial_team_abbr": team,
+                    }
+                )
     return out
+
+
+def _load_true_free_agent_candidate_keys(as_of_date: str) -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for row in _load_true_free_agent_candidate_rows(as_of_date):
+        name = str(row.get("player_name") or "").strip()
+        team = str(row.get("editorial_team_abbr") or "").strip().upper()
+        if name:
+            out.add((normalize_name(name), team))
+    return out
+
+
+def _load_true_free_agent_candidate_player_keys(as_of_date: str) -> list[str]:
+    keys = {
+        str(row.get("yahoo_player_key") or "").strip()
+        for row in _load_true_free_agent_candidate_rows(as_of_date)
+        if str(row.get("yahoo_player_key") or "").strip()
+    }
+    return sorted(keys)
 
 
 def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str):
@@ -942,6 +968,23 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
     LIMIT 300;
     """
 
+    candidate_player_keys = _load_true_free_agent_candidate_player_keys(as_of_date)
+    if candidate_player_keys:
+        sql = sql.replace(
+            """    ORDER BY
+      COALESCE(p.rank_value, 999999),
+      COALESCE(p.percent_owned, -1) DESC,
+      p.full_name
+    LIMIT 300;""",
+            """      AND p.yahoo_player_key = ANY(%s::text[])
+    ORDER BY
+      COALESCE(p.rank_value, 999999),
+      COALESCE(p.percent_owned, -1) DESC,
+      p.full_name;""",
+        )
+        if "p.yahoo_player_key = ANY(%s::text[])" not in sql:
+            raise RuntimeError("Failed to inject true FA player-key filter into FA batter query")
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -958,6 +1001,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
                     as_of_date,
                     league_key,
                     _season_year(as_of_date),
+                    *([candidate_player_keys] if candidate_player_keys else []),
                 ),
             )
             cols = [d.name for d in cur.description]
