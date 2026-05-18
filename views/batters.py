@@ -762,40 +762,17 @@ active_rows = [r for r in rows if not is_unavailable(r)]
 with st.sidebar:
     render_refresh_sidebar(ctx)
 
-    auto_remaining_preview = get_remaining_starts(ctx["league_key"], ctx["team_key"], ctx["as_of_date"])
-    with st.expander("Slot cap source", expanded=False):
-        st.caption("Auto from slot_usage_seed + roster_snapshot. Use manual override only if you need to reconcile.")
-        st.caption(format_remaining_starts_caption(auto_remaining_preview))
-        st.checkbox("Use manual slot override", value=False, key="use_manual_slot_override")
-        if st.session_state.get("use_manual_slot_override", False):
-            for family in SLOT_PRESSURE_FAMILY_ORDER:
-                st.number_input(
-                    f"{family} remaining starts",
-                    min_value=0,
-                    max_value=(486 if family == "OF" else 162),
-                    step=1,
-                    key=f"remaining_starts_{family}",
-                    value=auto_remaining_preview.get(family, DEFAULT_SLOT_REMAINING_STARTS[family]),
-                )
+manual_choices: dict[str, str | None] = {}
+for slot_id, slot_type in SLOT_ORDER:
+    candidates = candidate_rows_for_slot(active_rows, slot_id, slot_type)
+    options = ["AUTO"] + [make_player_key(r) for r in candidates]
+    current = st.session_state.get(f"override_{slot_id}", "AUTO")
+    if current not in options:
+        current = "AUTO"
+        st.session_state[f"override_{slot_id}"] = "AUTO"
 
-    st.header("Slot overrides")
-    st.write("Leave on AUTO to keep the optimized default lineup.")
-    manual_choices: dict[str, str | None] = {}
-    for slot_id, slot_type in SLOT_ORDER:
-        candidates = candidate_rows_for_slot(active_rows, slot_id, slot_type)
-        options = ["AUTO"] + [make_player_key(r) for r in candidates]
-        current = st.session_state.get(f"override_{slot_id}", "AUTO")
-        if current not in options:
-            current = "AUTO"
-            st.session_state[f"override_{slot_id}"] = "AUTO"
+    manual_choices[slot_id] = None if current == "AUTO" else current
 
-        choice = st.selectbox(
-            slot_label(slot_id, slot_type),
-            options=options,
-            index=options.index(current),
-            key=f"override_{slot_id}",
-        )
-        manual_choices[slot_id] = None if choice == "AUTO" else choice
 
 assignment = optimize_lineup(active_rows, manual_choices)
 starting_lineup_rows = build_starting_lineup_table(assignment)
@@ -852,6 +829,45 @@ with tab_lineup:
     )
 
 with tab_slots:
+    st.subheader("Slot controls")
+
+    auto_remaining_preview = get_remaining_starts(ctx["league_key"], ctx["team_key"], ctx["as_of_date"])
+    with st.expander("Slot cap source", expanded=False):
+        st.caption("Auto from slot_usage_seed + roster_snapshot. Use manual override only if you need to reconcile.")
+        st.caption(format_remaining_starts_caption(auto_remaining_preview))
+        st.checkbox("Use manual slot override", value=False, key="use_manual_slot_override")
+        if st.session_state.get("use_manual_slot_override", False):
+            for family in SLOT_PRESSURE_FAMILY_ORDER:
+                st.number_input(
+                    f"{family} remaining starts",
+                    min_value=0,
+                    max_value=(486 if family == "OF" else 162),
+                    step=1,
+                    key=f"remaining_starts_{family}",
+                    value=auto_remaining_preview.get(family, DEFAULT_SLOT_REMAINING_STARTS[family]),
+                )
+
+    st.subheader("Slot overrides")
+    st.write("Leave on AUTO to keep the optimized default lineup.")
+
+    for slot_id, slot_type in SLOT_ORDER:
+        candidates = candidate_rows_for_slot(active_rows, slot_id, slot_type)
+        options = ["AUTO"] + [make_player_key(r) for r in candidates]
+        current = st.session_state.get(f"override_{slot_id}", "AUTO")
+        if current not in options:
+            current = "AUTO"
+            st.session_state[f"override_{slot_id}"] = "AUTO"
+
+        st.selectbox(
+            slot_label(slot_id, slot_type),
+            options=options,
+            index=options.index(current),
+            key=f"override_{slot_id}",
+        )
+
+    st.divider()
+    st.subheader("Slot candidates")
+
     for slot_id, slot_type in SLOT_ORDER:
         chosen = assignment.get(slot_id)
         chosen_name = make_player_key(chosen) if chosen else None
