@@ -207,10 +207,10 @@ def _start_frequency_penalty(rate: float | None) -> int:
     if rate >= 0.60:
         return -1
     if rate >= 0.40:
-        return -2
-    if rate >= 0.20:
         return -3
-    return -5
+    if rate >= 0.20:
+        return -5
+    return -10
 
 
 def _insert_rank_reason_before_status(note: str, new_part: str) -> str:
