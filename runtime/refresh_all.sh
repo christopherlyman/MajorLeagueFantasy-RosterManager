@@ -197,6 +197,10 @@ docker cp \
 
 echo "COPIED $HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"
 
+
+stage "REFRESH ALL: USUAL DAILY CAP USAGE"
+docker exec -i "$APP_CONTAINER" bash -lc "cd /app && PYTHONPATH=/app python scripts/yahoo/refresh_usual_daily_cap_usage.py"
+
 stage "REFRESH ALL: SPLITS PIPELINE"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \
