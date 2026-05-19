@@ -10,6 +10,7 @@ import streamlit as st
 from datetime import date, timedelta
 import pandas as pd
 import os
+import re
 
 from views.shared_refresh import render_refresh_sidebar
 
@@ -564,6 +565,98 @@ def game_with_pitcher(row: dict) -> str:
     return " | ".join(out)
 
 
+
+_CURRENT_SLOT_ASSIGNMENT_DIFFS: dict[str, float] = {}
+
+
+def _slot_assignment_start_penalty(row: dict) -> float:
+    match = re.search(r"Start%\s+(-?\d+(?:\.\d+)?)", str(row.get("note_short") or ""))
+    if not match:
+        return 0.0
+    try:
+        return float(match.group(1))
+    except Exception:
+        return 0.0
+
+
+def _slot_assignment_risk_score(row: dict) -> float:
+    penalty = _slot_assignment_start_penalty(row)
+    if penalty >= 0:
+        return 0.0
+    return min(1.0, abs(penalty) / 10.0)
+
+
+def _slot_assignment_cap_bonus(slot_type: str) -> float:
+    slot = str(slot_type or "").upper()
+    try:
+        diff = float(_CURRENT_SLOT_ASSIGNMENT_DIFFS.get(slot, 0.0) or 0.0)
+    except Exception:
+        diff = 0.0
+    return min(3.0, max(0.0, -diff) * 0.75)
+
+
+def _slot_assignment_flex_bonus(slot_type: str, row: dict) -> float:
+    slot = str(slot_type or "").upper()
+    risk = _slot_assignment_risk_score(row)
+
+    weights = {
+        "UTIL": 1.00,
+        "IF": 0.70,
+        "OF": 0.40,
+        "1B": 0.10,
+        "2B": 0.10,
+        "3B": 0.10,
+        "SS": 0.10,
+        "C": 0.00,
+    }
+    return risk * weights.get(slot, 0.0)
+
+
+def _slot_assignment_reliable_constrained_bonus(slot_type: str, row: dict) -> float:
+    slot = str(slot_type or "").upper()
+    reliability = 1.0 - _slot_assignment_risk_score(row)
+
+    weights = {
+        "C": 0.75,
+        "1B": 0.75,
+        "2B": 0.75,
+        "3B": 0.75,
+        "SS": 0.75,
+        "OF": 0.35,
+        "IF": 0.10,
+        "UTIL": 0.00,
+    }
+    return reliability * weights.get(slot, 0.0)
+
+
+def slot_assignment_bonus(slot_type: str, row: dict) -> float:
+    ctx_obj = globals().get("ctx") or {}
+    if str(ctx_obj.get("league_key") or "").strip() != "469.l.22528":
+        return 0.0
+
+    return (
+        _slot_assignment_cap_bonus(slot_type)
+        + _slot_assignment_flex_bonus(slot_type, row)
+        + _slot_assignment_reliable_constrained_bonus(slot_type, row)
+    )
+
+
+def _current_usual_assignment_slot_diffs(ctx_obj: dict) -> dict[str, float]:
+    if str(ctx_obj.get("league_key") or "").strip() != "469.l.22528":
+        return {}
+
+    try:
+        summary = _fetch_usual_cap_usage_summary(ctx_obj)
+        projections = _usual_cap_projection_values(ctx_obj, summary)
+    except Exception:
+        return {}
+
+    return {
+        slot: float((projections.get(slot) or {}).get("diff", 0.0) or 0.0)
+        for slot in ["C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"]
+    }
+
+
 def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None]) -> dict[str, dict | None]:
     players, player_index = build_player_index(rows)
 
@@ -606,7 +699,7 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
             next_score, next_assign = solve(slot_pos + 1, used_mask | bit)
             if next_score == -inf:
                 return -inf, ()
-            total = float(players[idx]["ranking"]) + next_score
+            total = float(players[idx]["ranking"]) + slot_assignment_bonus(slot_type, players[idx]) + next_score
             return total, (idx,) + next_assign
 
         best_score = -inf
@@ -624,7 +717,7 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
             next_score, next_assign = solve(slot_pos + 1, used_mask | bit)
             if next_score == -inf:
                 continue
-            total = float(players[idx]["ranking"]) + next_score
+            total = float(players[idx]["ranking"]) + slot_assignment_bonus(slot_type, players[idx]) + next_score
             if total > best_score:
                 best_score = total
                 best_assign = (idx,) + next_assign
@@ -1273,6 +1366,7 @@ for slot_id, slot_type in SLOT_ORDER:
     manual_choices[slot_id] = None if current == "AUTO" else current
 
 
+_CURRENT_SLOT_ASSIGNMENT_DIFFS = _current_usual_assignment_slot_diffs(ctx)
 assignment = optimize_lineup(active_rows, manual_choices)
 starting_lineup_rows = build_starting_lineup_table(assignment)
 bench_rows = build_bench_table(rows, assignment)
