@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 
 import streamlit as st
+from datetime import date, timedelta
 import pandas as pd
 import os
 
@@ -774,13 +775,15 @@ def _cap_usage_sort_key(slot: str) -> int:
 
 def _format_baseball_ip_from_decimal(value) -> str:
     try:
-        total_thirds = int(round(float(value or 0) * 3))
+        numeric = float(value or 0)
     except Exception:
-        total_thirds = 0
+        numeric = 0.0
 
+    sign = "-" if numeric < 0 else ""
+    total_thirds = int(round(abs(numeric) * 3))
     whole = total_thirds // 3
     thirds = total_thirds % 3
-    return f"{whole}.{thirds}"
+    return f"{sign}{whole}.{thirds}"
 
 
 def _format_cap_usage_value(slot: str, value) -> str:
@@ -1016,6 +1019,205 @@ def _format_cap_sidebar_number(slot: str, value) -> str:
         return "0"
 
 
+
+USUAL_CAP_PROJECTION_SEASON_START = date(2026, 3, 27)
+USUAL_CAP_PROJECTION_SEASON_END = date(2026, 9, 27)
+USUAL_CAP_TEAM_ALIASES = {
+    "AZ": ["ARI"],
+    "ATH": ["ATH", "OAK"],
+    "CWS": ["CWS", "CHW"],
+    "KC": ["KC", "KCR"],
+    "SD": ["SD", "SDP"],
+    "SF": ["SF", "SFG"],
+    "TB": ["TB", "TBR"],
+    "WSH": ["WSH", "WSN"],
+}
+
+
+@st.cache_data(ttl=21600)
+def _usual_cap_team_id_map() -> dict[str, int]:
+    req = urllib.request.Request(
+        "https://statsapi.mlb.com/api/v1/teams?sportId=1",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+
+    out: dict[str, int] = {}
+    for team in data.get("teams", []):
+        for key in {team.get("abbreviation"), team.get("teamCode"), team.get("fileCode")}:
+            if key:
+                out[str(key).upper()] = int(team["id"])
+    return out
+
+
+def _usual_cap_team_id_for(team_abbr: str, team_map: dict[str, int]) -> int | None:
+    abbr = str(team_abbr or "").upper()
+    if abbr in team_map:
+        return team_map[abbr]
+
+    for alias in USUAL_CAP_TEAM_ALIASES.get(abbr, []):
+        if alias in team_map:
+            return team_map[alias]
+
+    return None
+
+
+@st.cache_data(ttl=21600)
+def _usual_cap_remaining_team_games(team_abbr: str, start_iso: str, end_iso: str) -> int:
+    team_map = _usual_cap_team_id_map()
+    team_id = _usual_cap_team_id_for(team_abbr, team_map)
+    if team_id is None:
+        return 0
+
+    params = urllib.parse.urlencode(
+        {
+            "sportId": 1,
+            "teamId": team_id,
+            "startDate": start_iso,
+            "endDate": end_iso,
+        }
+    )
+    req = urllib.request.Request(
+        f"https://statsapi.mlb.com/api/v1/schedule?{params}",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+
+    return sum(len(d.get("games", [])) for d in data.get("dates", []))
+
+
+def _usual_cap_row_eligible_set(row: dict) -> set[str]:
+    raw = row.get("eligible_display") or row.get("eligible_positions") or ""
+    if isinstance(raw, list):
+        values = raw
+    else:
+        values = str(raw).replace("[", "").replace("]", "").replace("'", "").split(",")
+
+    return {str(v).strip().upper() for v in values if str(v).strip()}
+
+
+def _usual_cap_slot_ok(slot: str, eligible: set[str]) -> bool:
+    slot = str(slot or "").upper()
+    if slot == "UTIL":
+        return True
+    if slot == "IF":
+        return bool(eligible & {"1B", "2B", "3B", "SS", "IF"})
+    if slot == "OF":
+        return "OF" in eligible
+    return slot in eligible
+
+
+def _fetch_usual_current_cap_slots(ctx: dict) -> list[dict]:
+    sql = """
+    SELECT selected_position, full_name, yahoo_player_key, mlb_team_abbr
+    FROM lineup_tool.roster_snapshot
+    WHERE league_key = %s
+      AND team_key = %s
+      AND as_of_date = %s
+      AND upper(selected_position) IN ('C','1B','2B','3B','SS','IF','OF','UTIL')
+    """
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (ctx.get("league_key"), ctx.get("team_key"), ctx.get("as_of_date")),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return []
+
+    return [
+        {
+            "slot": "UTIL" if str(row[0]).upper() == "UTIL" else str(row[0]).upper(),
+            "player": row[1],
+            "yahoo_player_key": row[2],
+            "team": row[3],
+        }
+        for row in rows
+    ]
+
+
+def _format_cap_diff_number(slot: str, value) -> str:
+    slot = str(slot or "").upper()
+    if value is None:
+        return ""
+
+    if slot == "P":
+        return _format_baseball_ip_from_decimal(value)
+
+    try:
+        return str(int(round(float(value or 0))))
+    except Exception:
+        return "0"
+
+
+def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, dict]:
+    active_day = date.fromisoformat(str(ctx.get("as_of_date")))
+    today = active_day.isoformat()
+    tomorrow = (active_day + timedelta(days=1)).isoformat()
+    season_end = USUAL_CAP_PROJECTION_SEASON_END.isoformat()
+
+    current_slots = _fetch_usual_current_cap_slots(ctx)
+    summary_by_slot = {row["slot_family"]: row for row in summary}
+
+    def games_for_team(team_abbr: str, start_iso: str) -> int:
+        return _usual_cap_remaining_team_games(str(team_abbr or "").upper(), start_iso, season_end)
+
+    def occupant_future(slot: str, start_iso: str) -> int:
+        return sum(
+            games_for_team(row["team"], start_iso)
+            for row in current_slots
+            if row["slot"] == slot
+        )
+
+    def best_eligible_future(slot: str, start_iso: str) -> int:
+        values = []
+        for row in active_rows:
+            if _usual_cap_slot_ok(slot, _usual_cap_row_eligible_set(row)):
+                values.append(games_for_team(row.get("mlb_team_abbr"), start_iso))
+        return max(values) if values else 0
+
+    def top_n_eligible_future(slot: str, n: int, start_iso: str) -> int:
+        values = []
+        for row in active_rows:
+            if _usual_cap_slot_ok(slot, _usual_cap_row_eligible_set(row)):
+                values.append(games_for_team(row.get("mlb_team_abbr"), start_iso))
+        return sum(sorted(values, reverse=True)[:n])
+
+    out: dict[str, dict] = {}
+
+    for slot, row in summary_by_slot.items():
+        used = float(row["used_now"] or 0)
+        max_allowed = float(row["max_allowed"] or 0)
+
+        if slot == "P":
+            elapsed = max(1, (active_day - USUAL_CAP_PROJECTION_SEASON_START).days)
+            total = max(1, (USUAL_CAP_PROJECTION_SEASON_END - USUAL_CAP_PROJECTION_SEASON_START).days)
+            projected = min(max_allowed, used / elapsed * total)
+        elif slot == "OF":
+            # Best observed Yahoo-style hitter model:
+            # OF behaves as a 3-slot pool and appears to include today.
+            projected = min(max_allowed, used + top_n_eligible_future("OF", 3, today) + 1)
+        elif slot == "IF":
+            projected = min(max_allowed, used + occupant_future("IF", tomorrow))
+        elif slot == "UTIL":
+            projected = min(max_allowed, used + occupant_future("UTIL", today))
+        else:
+            future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
+            projected = min(max_allowed, used + future)
+
+        out[slot] = {
+            "projected": projected,
+            "diff": projected - max_allowed,
+        }
+
+    return out
+
+
 def render_usual_cap_usage_sidebar(ctx: dict) -> None:
     if str(ctx.get("league_key") or "").strip() != USUAL_CAP_USAGE_LEAGUE_KEY:
         return
@@ -1030,23 +1232,30 @@ def render_usual_cap_usage_sidebar(ctx: dict) -> None:
         return
 
     seed_date = summary[0]["seed_as_of_date"]
+    projections = _usual_cap_projection_values(ctx, summary)
 
-    display_rows = [
-        {
-            "Pos": row["slot_family"],
-            "Used": _format_cap_sidebar_number(row["slot_family"], row["used_now"]),
-            "Remain": _format_cap_sidebar_number(row["slot_family"], row["remaining_now"]),
-        }
-        for row in summary
-    ]
+    display_rows = []
+    for row in summary:
+        slot = row["slot_family"]
+        projection = projections.get(slot, {})
 
-    st.caption(f"Tracked from Yahoo anchor through Daily Refresh. Seed: {seed_date}")
-    st.dataframe(display_rows, hide_index=True, width="content", key=f"usual_cap_usage_{ctx['as_of_date']}_{len(display_rows)}")
+        display_rows.append(
+            {
+                "Pos": slot,
+                "Used": _format_cap_sidebar_number(slot, row["used_now"]),
+                "Remain": _format_cap_sidebar_number(slot, row["remaining_now"]),
+                "Proj": _format_cap_sidebar_number(slot, projection.get("projected")),
+                "Diff": _format_cap_diff_number(slot, projection.get("diff")),
+            }
+        )
 
-    recent = _fetch_usual_recent_cap_usage(ctx)
-    if recent:
-        with st.expander("Actual daily usage", expanded=False):
-            st.dataframe(recent, hide_index=True, width="content", key=f"usual_recent_cap_usage_{ctx['as_of_date']}_{len(recent)}")
+    st.caption(f"Calculated projection. Seed: {seed_date}")
+    st.dataframe(
+        display_rows,
+        hide_index=True,
+        width="content",
+        key=f"usual_cap_projection_{ctx['as_of_date']}_{len(display_rows)}",
+    )
 
 with st.sidebar:
     render_refresh_sidebar(ctx)
