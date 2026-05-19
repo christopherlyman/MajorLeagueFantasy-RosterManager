@@ -74,8 +74,6 @@ def _hitter_game_used_from_cache(row) -> int:
     if str(fetch_status or "").strip().lower() != "success":
         return 0
 
-    # Approximation: Yahoo max-games should increment when the active hitter
-    # records batting/stat activity. Validation against Yahoo UI remains required.
     return int(
         _safe_int(ab) > 0
         or _safe_int(r) > 0
@@ -86,6 +84,58 @@ def _hitter_game_used_from_cache(row) -> int:
         or _safe_int(k) > 0
         or _safe_int(hits) > 0
     )
+
+
+def _hitter_game_used_from_yahoo_stat_map(stat_map: dict[str, str]) -> int | None:
+    """
+    Return:
+      1 when Yahoo daily roster stats show hitter activity
+      0 when Yahoo daily roster stats show no hitter activity
+      None when the Yahoo stat map is missing/insufficient and cache fallback should be used
+
+    Known hitter stat IDs:
+      Team roster daily payload:
+        60 = H/AB
+         7 = R
+        12 = HR
+        13 = RBI
+        16 = SB
+        21 = K
+         3 = AVG
+
+      Direct player daily payload:
+         0 = Games
+         6 = AB
+         7 = R
+        12 = HR
+        13 = RBI
+        16 = SB
+        21 = K
+    """
+    if not stat_map:
+        return None
+
+    h_ab = str(stat_map.get("60") or "").strip()
+    if h_ab and h_ab != "-":
+        if "/" in h_ab:
+            h_s, ab_s = h_ab.split("/", 1)
+            if _safe_int(h_s) > 0 or _safe_int(ab_s) > 0:
+                return 1
+        elif _safe_int(h_ab) > 0:
+            return 1
+
+    for sid in ("0", "6", "7", "12", "13", "16", "21"):
+        val = str(stat_map.get(sid) or "").strip()
+        if val and val != "-" and _safe_int(val) > 0:
+            return 1
+
+    # If Yahoo sent explicit hitter stat fields but none indicate activity,
+    # treat as no cap game used. AVG alone is intentionally ignored.
+    explicit = any(str(stat_map.get(sid) or "").strip() not in ("", "-") for sid in ("60", "0", "6", "7", "12", "13", "16", "21"))
+    if explicit:
+        return 0
+
+    return None
 
 
 def _baseball_ip_to_decimal(value) -> Decimal:
@@ -189,6 +239,42 @@ def _fetch_yahoo_team_daily_stat_maps(team_key: str, usage_date: date) -> dict[s
 
     return out
 
+
+
+def _fetch_yahoo_player_daily_stat_map(player_key: str, usage_date: date) -> dict[str, str]:
+    token = get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    url = (
+        "https://fantasysports.yahooapis.com/fantasy/v2/player/"
+        f"{player_key}/stats;type=date;date={usage_date.isoformat()}?format=json"
+    )
+
+    r = requests.get(url, headers=headers, timeout=45)
+    if r.status_code != 200:
+        return {}
+
+    try:
+        data = r.json()
+    except Exception:
+        return {}
+
+    stats: dict[str, str] = {}
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            if "stat" in obj and isinstance(obj["stat"], dict):
+                sid = str(obj["stat"].get("stat_id") or "").strip()
+                val = str(obj["stat"].get("value") or "").strip()
+                if sid:
+                    stats[sid] = val
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    return stats
 
 def _load_active_slots(league_key: str, team_key: str, usage_date: date, slots: tuple[str, ...]) -> list[dict]:
     slot_params = tuple(slots)
@@ -332,11 +418,33 @@ def main() -> None:
     usage_by_slot = {slot: Decimal("0") for slot in HITTER_SLOTS}
     hitter_detail = []
 
+    direct_player_stat_maps: dict[str, dict[str, str]] = {}
+
     for r in hitter_rows:
         key = str(r["yahoo_player_key"])
         slot = _norm_slot(r["selected_position"])
-        cache_row = batter_cache.get(key)
-        used = _hitter_game_used_from_cache(cache_row)
+        stat_map = yahoo_stat_maps.get(key, {})
+        used_from_yahoo = _hitter_game_used_from_yahoo_stat_map(stat_map)
+        source = "yahoo_team_roster_daily_stats_hitter"
+
+        if used_from_yahoo is None:
+            direct_stat_map = direct_player_stat_maps.get(key)
+            if direct_stat_map is None:
+                direct_stat_map = _fetch_yahoo_player_daily_stat_map(key, usage_date)
+                direct_player_stat_maps[key] = direct_stat_map
+
+            direct_used = _hitter_game_used_from_yahoo_stat_map(direct_stat_map)
+
+            if direct_used is not None:
+                stat_map = direct_stat_map
+                used = direct_used
+                source = "yahoo_player_daily_stats_hitter"
+            else:
+                cache_row = batter_cache.get(key)
+                used = _hitter_game_used_from_cache(cache_row)
+                source = "rmt.yahoo_batter_daily_stat_cache_fallback"
+        else:
+            used = used_from_yahoo
 
         usage_by_slot[slot] = usage_by_slot.get(slot, Decimal("0")) + Decimal(used)
         hitter_detail.append(
@@ -345,7 +453,8 @@ def main() -> None:
                 "player": r["full_name"],
                 "yahoo_player_key": key,
                 "used": used,
-                "source": "rmt.yahoo_batter_daily_stat_cache",
+                "source": source,
+                "yahoo_stat_map": stat_map,
             }
         )
 

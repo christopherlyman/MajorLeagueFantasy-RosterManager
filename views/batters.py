@@ -12,6 +12,7 @@ import os
 
 from views.shared_refresh import render_refresh_sidebar
 
+from services.db import get_connection
 from services.queries import (
     fetch_available_batter_rows,
     fetch_batter_roster_rows,
@@ -759,8 +760,297 @@ for slot_id, _slot_type in SLOT_ORDER:
 
 active_rows = [r for r in rows if not is_unavailable(r)]
 
+
+USUAL_CAP_USAGE_LEAGUE_KEY = "469.l.22528"
+USUAL_CAP_USAGE_SLOT_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL", "P"]
+
+
+def _cap_usage_sort_key(slot: str) -> int:
+    try:
+        return USUAL_CAP_USAGE_SLOT_ORDER.index(str(slot).upper())
+    except ValueError:
+        return 99
+
+
+def _format_baseball_ip_from_decimal(value) -> str:
+    try:
+        total_thirds = int(round(float(value or 0) * 3))
+    except Exception:
+        total_thirds = 0
+
+    whole = total_thirds // 3
+    thirds = total_thirds % 3
+    return f"{whole}.{thirds}"
+
+
+def _format_cap_usage_value(slot: str, value) -> str:
+    slot = str(slot or "").upper()
+    if slot == "P":
+        return f"{_format_baseball_ip_from_decimal(value)} IP"
+
+    try:
+        return str(int(round(float(value or 0))))
+    except Exception:
+        return "0"
+
+
+def _fetch_usual_latest_cap_usage(ctx: dict) -> list[dict]:
+    if str(ctx.get("league_key") or "").strip() != USUAL_CAP_USAGE_LEAGUE_KEY:
+        return []
+
+    sql = """
+    WITH latest AS (
+        SELECT max(usage_date) AS usage_date
+        FROM rmt.usual_daily_cap_usage
+        WHERE league_key = %s
+          AND team_key = %s
+    )
+    SELECT
+        u.usage_date,
+        u.slot_family,
+        u.used_value,
+        u.source,
+        u.loaded_at_utc
+    FROM rmt.usual_daily_cap_usage u
+    JOIN latest l
+      ON l.usage_date = u.usage_date
+    WHERE u.league_key = %s
+      AND u.team_key = %s
+    ORDER BY
+      CASE u.slot_family
+        WHEN 'C' THEN 1
+        WHEN '1B' THEN 2
+        WHEN '2B' THEN 3
+        WHEN '3B' THEN 4
+        WHEN 'SS' THEN 5
+        WHEN 'IF' THEN 6
+        WHEN 'OF' THEN 7
+        WHEN 'UTIL' THEN 8
+        WHEN 'P' THEN 9
+        ELSE 99
+      END
+    """
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        ctx.get("league_key"),
+                        ctx.get("team_key"),
+                        ctx.get("league_key"),
+                        ctx.get("team_key"),
+                    ),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return []
+
+    return [
+        {
+            "usage_date": row[0],
+            "slot_family": str(row[1]).upper(),
+            "used_value": row[2],
+            "source": row[3],
+            "loaded_at_utc": row[4],
+        }
+        for row in rows
+    ]
+
+
+def _fetch_usual_recent_cap_usage(ctx: dict, limit_dates: int = 7) -> list[dict]:
+    if str(ctx.get("league_key") or "").strip() != USUAL_CAP_USAGE_LEAGUE_KEY:
+        return []
+
+    sql = """
+    WITH recent_dates AS (
+        SELECT DISTINCT usage_date
+        FROM rmt.usual_daily_cap_usage
+        WHERE league_key = %s
+          AND team_key = %s
+        ORDER BY usage_date DESC
+        LIMIT %s
+    )
+    SELECT
+        u.usage_date,
+        u.slot_family,
+        u.used_value
+    FROM rmt.usual_daily_cap_usage u
+    JOIN recent_dates d
+      ON d.usage_date = u.usage_date
+    WHERE u.league_key = %s
+      AND u.team_key = %s
+    ORDER BY u.usage_date DESC
+    """
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        ctx.get("league_key"),
+                        ctx.get("team_key"),
+                        limit_dates,
+                        ctx.get("league_key"),
+                        ctx.get("team_key"),
+                    ),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return []
+
+    by_date: dict[str, dict] = {}
+
+    for usage_date, slot, value in rows:
+        dkey = str(usage_date)
+        if dkey not in by_date:
+            by_date[dkey] = {"Date": dkey}
+
+        slot_key = str(slot).upper()
+        by_date[dkey][slot_key] = _format_cap_usage_value(slot_key, value)
+
+    out = []
+    for dkey in sorted(by_date.keys(), reverse=True):
+        row = by_date[dkey]
+        ordered = {"Date": row.get("Date", dkey)}
+        for slot in USUAL_CAP_USAGE_SLOT_ORDER:
+            ordered[slot] = row.get(slot, "")
+        out.append(ordered)
+
+    return out
+
+
+def _fetch_usual_cap_usage_summary(ctx: dict) -> list[dict]:
+    if str(ctx.get("league_key") or "").strip() != USUAL_CAP_USAGE_LEAGUE_KEY:
+        return []
+
+    sql = """
+    WITH seed AS (
+        SELECT
+            league_key,
+            team_key,
+            season_year,
+            slot_family,
+            max_allowed,
+            seed_used,
+            seed_as_of_date
+        FROM rmt.usual_cap_usage_seed
+        WHERE league_key = %s
+          AND team_key = %s
+          AND season_year = %s
+    ),
+    usage AS (
+        SELECT
+            u.slot_family,
+            sum(u.used_value) AS used_since_seed
+        FROM rmt.usual_daily_cap_usage u
+        JOIN seed s
+          ON s.league_key = u.league_key
+         AND s.team_key = u.team_key
+         AND s.slot_family = u.slot_family
+        WHERE u.usage_date > s.seed_as_of_date
+        GROUP BY u.slot_family
+    )
+    SELECT
+        s.slot_family,
+        s.seed_used + COALESCE(u.used_since_seed, 0) AS used_now,
+        s.max_allowed,
+        s.max_allowed - (s.seed_used + COALESCE(u.used_since_seed, 0)) AS remaining_now,
+        s.seed_as_of_date
+    FROM seed s
+    LEFT JOIN usage u
+      ON u.slot_family = s.slot_family
+    ORDER BY
+      CASE s.slot_family
+        WHEN 'C' THEN 1
+        WHEN '1B' THEN 2
+        WHEN '2B' THEN 3
+        WHEN '3B' THEN 4
+        WHEN 'SS' THEN 5
+        WHEN 'IF' THEN 6
+        WHEN 'OF' THEN 7
+        WHEN 'UTIL' THEN 8
+        WHEN 'P' THEN 9
+        ELSE 99
+      END
+    """
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        ctx.get("league_key"),
+                        ctx.get("team_key"),
+                        int(str(ctx.get("as_of_date"))[:4]),
+                    ),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return []
+
+    return [
+        {
+            "slot_family": str(row[0]).upper(),
+            "used_now": row[1],
+            "max_allowed": row[2],
+            "remaining_now": row[3],
+            "seed_as_of_date": row[4],
+        }
+        for row in rows
+    ]
+
+
+def _format_cap_sidebar_number(slot: str, value) -> str:
+    slot = str(slot or "").upper()
+
+    if slot == "P":
+        return _format_baseball_ip_from_decimal(value)
+
+    try:
+        return str(int(round(float(value or 0))))
+    except Exception:
+        return "0"
+
+
+def render_usual_cap_usage_sidebar(ctx: dict) -> None:
+    if str(ctx.get("league_key") or "").strip() != USUAL_CAP_USAGE_LEAGUE_KEY:
+        return
+
+    st.divider()
+    st.subheader("Max Games & IP")
+
+    summary = _fetch_usual_cap_usage_summary(ctx)
+
+    if not summary:
+        st.caption("No cap usage seed found yet.")
+        return
+
+    seed_date = summary[0]["seed_as_of_date"]
+
+    display_rows = [
+        {
+            "Pos": row["slot_family"],
+            "Used": _format_cap_sidebar_number(row["slot_family"], row["used_now"]),
+            "Remain": _format_cap_sidebar_number(row["slot_family"], row["remaining_now"]),
+        }
+        for row in summary
+    ]
+
+    st.caption(f"Tracked from Yahoo anchor through Daily Refresh. Seed: {seed_date}")
+    st.dataframe(display_rows, hide_index=True, width="content", key=f"usual_cap_usage_{ctx['as_of_date']}_{len(display_rows)}")
+
+    recent = _fetch_usual_recent_cap_usage(ctx)
+    if recent:
+        with st.expander("Actual daily usage", expanded=False):
+            st.dataframe(recent, hide_index=True, width="content", key=f"usual_recent_cap_usage_{ctx['as_of_date']}_{len(recent)}")
+
 with st.sidebar:
     render_refresh_sidebar(ctx)
+    render_usual_cap_usage_sidebar(ctx)
 
 manual_choices: dict[str, str | None] = {}
 for slot_id, slot_type in SLOT_ORDER:
@@ -826,6 +1116,7 @@ with tab_lineup:
         height=roster_table_height,
         hide_index=True,
         column_config=BATTER_LINEUP_COLUMN_CONFIG,
+        key=f"combined_roster_{ctx['as_of_date']}_{len(combined_roster_rows)}",
     )
 
 with tab_slots:
@@ -872,11 +1163,13 @@ with tab_slots:
         chosen = assignment.get(slot_id)
         chosen_name = make_player_key(chosen) if chosen else None
         st.subheader(slot_label(slot_id, slot_type))
+        slot_table_rows = build_slot_table(slot_id, slot_type, active_rows, chosen_name)
         st.dataframe(
-            build_slot_table(slot_id, slot_type, active_rows, chosen_name),
+            slot_table_rows,
             width="content",
             hide_index=True,
             column_config=BATTER_SLOT_COLUMN_CONFIG,
+            key=f"slot_table_{slot_id}_{ctx['as_of_date']}_{len(slot_table_rows)}",
         )
 
 with tab_fa:
@@ -928,6 +1221,7 @@ with tab_fa:
             width="content",
             hide_index=True,
             column_config=BATTER_FA_COLUMN_CONFIG,
+            key=f"fa_batters_{ctx['as_of_date']}_{len(fa_rows)}",
         )
 
 st.divider()
