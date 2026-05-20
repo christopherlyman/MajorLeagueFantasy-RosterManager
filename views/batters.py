@@ -743,7 +743,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
         out.append(
             {
                 "Slot": slot_label(slot_id, slot_type),
-                "Threshold": threshold,
+                "Threshold": str(threshold),
                 "Player": chosen.get("player_display", "") if chosen else "",
                 "Eligible Pos.": chosen.get("eligible_display", "") if chosen else "",
                 "Rank": chosen.get("ranking", "") if chosen else "",
