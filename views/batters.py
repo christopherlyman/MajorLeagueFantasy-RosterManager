@@ -1404,8 +1404,197 @@ def _style_combined_roster_row(row):
 
 combined_roster_styler = combined_roster_df.style.apply(_style_combined_roster_row, axis=1)
 
-tab_lineup, tab_slots, tab_fa = st.tabs(
-    ["Starting Lineup", "Slots", "Batter Free Agents"]
+
+ROSTER_POLICY_STATUSES = ["KEEPER", "DROPPABLE_HIGH", "DROPPABLE_LOW"]
+
+
+
+
+
+def _eligible_policy_tokens(value) -> set[str]:
+    if isinstance(value, list):
+        raw_values = value
+    else:
+        raw = str(value or "")
+        for ch in "[]'\"":
+            raw = raw.replace(ch, "")
+        raw_values = raw.split(",")
+
+    return {str(v).strip().upper() for v in raw_values if str(v).strip()}
+
+def _policy_cue(policy_status: str) -> str:
+    policy = str(policy_status or "").strip().upper()
+    if policy == "KEEPER":
+        return "🔵 Keeper"
+    if policy == "DROPPABLE_HIGH":
+        return "🟠 Droppable High"
+    return "🟢 Droppable Low"
+
+
+def _policy_editor_height(row_count: int) -> int:
+    # Avoid double scrolling by making the editor tall enough for all rows.
+    # Streamlit still caps based on browser/window constraints, but this removes the default small grid.
+    return max(220, min(1400, 42 * (int(row_count or 0) + 2)))
+
+
+def _render_policy_editor(ctx: dict, policy_rows: list[dict], roster_type: str) -> None:
+    rows = [r for r in policy_rows if r.get("Type") == roster_type]
+
+    st.markdown(f"#### {roster_type}s")
+
+    if not rows:
+        st.info(f"No {roster_type.lower()} policy rows found for the current roster/date.")
+        return
+
+    policy_df = pd.DataFrame(rows)
+
+    with st.form(key=f"roster_policy_form_{roster_type.lower()}_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}"):
+        submit = st.form_submit_button(f"Save {roster_type} Policy")
+
+        edited_policy_df = st.data_editor(
+            policy_df,
+            hide_index=True,
+            disabled=["Type", "Slot", "Player", "Yahoo Key", "Eligible", "Status", "Policy Cue"],
+            column_order=["Slot", "Player", "Eligible", "Status", "Policy Cue", "Policy", "Notes"],
+            column_config={
+                "Yahoo Key": None,
+                "Type": None,
+                "Policy": st.column_config.SelectboxColumn(
+                    "Policy",
+                    options=ROSTER_POLICY_STATUSES,
+                    required=True,
+                ),
+                "Policy Cue": st.column_config.TextColumn("Policy Cue"),
+                "Notes": st.column_config.TextColumn("Notes"),
+            },
+            key=f"roster_policy_editor_{roster_type.lower()}_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}_{len(rows)}",
+            use_container_width=True,
+            height=_policy_editor_height(len(rows)),
+        )
+
+        if submit:
+            saved = save_roster_policy_rows(ctx, edited_policy_df.to_dict("records"))
+            st.success(f"Saved {roster_type.lower()} policy for {saved} players.")
+            st.rerun()
+
+def fetch_roster_policy_rows(ctx: dict) -> list[dict]:
+    sql = """
+    SELECT
+        r.selected_position,
+        r.full_name,
+        r.yahoo_player_key,
+        r.eligible_positions,
+        COALESCE(r.status, '') AS player_status,
+        COALESCE(p.policy_status, 'DROPPABLE_LOW') AS policy_status,
+        COALESCE(p.notes, '') AS notes
+    FROM lineup_tool.roster_snapshot r
+    LEFT JOIN rmt.roster_player_policy p
+      ON p.league_key = r.league_key
+     AND p.team_key = r.team_key
+     AND p.yahoo_player_key = r.yahoo_player_key
+    WHERE r.league_key = %s
+      AND r.team_key = %s
+      AND r.as_of_date = %s
+      AND r.yahoo_player_key IS NOT NULL
+    ORDER BY
+        CASE upper(r.selected_position)
+            WHEN 'C' THEN 1
+            WHEN '1B' THEN 2
+            WHEN '2B' THEN 3
+            WHEN '3B' THEN 4
+            WHEN 'SS' THEN 5
+            WHEN 'IF' THEN 6
+            WHEN 'OF' THEN 7
+            WHEN 'UTIL' THEN 8
+            WHEN 'BN' THEN 9
+            WHEN 'IL' THEN 10
+            WHEN 'NA' THEN 11
+            WHEN 'P' THEN 12
+            ELSE 99
+        END,
+        r.full_name
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (ctx["league_key"], ctx["team_key"], ctx["as_of_date"]))
+            rows = cur.fetchall()
+
+    out = []
+    for row in rows:
+        tokens = _eligible_policy_tokens(row[3])
+        eligible = ", ".join(sorted(tokens)) if tokens else str(row[3] or "")
+        slot = str(row[0] or "").upper()
+        is_pitcher = slot == "P" or "P" in tokens
+
+        out.append(
+            {
+                "Type": "Pitcher" if is_pitcher else "Batter",
+                "Slot": row[0],
+                "Player": row[1],
+                "Yahoo Key": row[2],
+                "Eligible": eligible,
+                "Status": row[4],
+                "Policy": row[5],
+                "Policy Cue": _policy_cue(row[5]),
+                "Notes": row[6],
+            }
+        )
+
+    return out
+
+
+def save_roster_policy_rows(ctx: dict, edited_rows) -> int:
+    changed = 0
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for row in edited_rows:
+                yahoo_key = str(row.get("Yahoo Key") or "").strip()
+                if not yahoo_key:
+                    continue
+
+                policy = str(row.get("Policy") or "DROPPABLE_LOW").strip()
+                if policy not in ROSTER_POLICY_STATUSES:
+                    policy = "DROPPABLE_LOW"
+
+                notes = str(row.get("Notes") or "").strip()
+
+                cur.execute(
+                    """
+                    INSERT INTO rmt.roster_player_policy (
+                        league_key,
+                        team_key,
+                        yahoo_player_key,
+                        policy_status,
+                        notes,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, now())
+                    ON CONFLICT (league_key, team_key, yahoo_player_key)
+                    DO UPDATE SET
+                        policy_status = EXCLUDED.policy_status,
+                        notes = EXCLUDED.notes,
+                        updated_at = now()
+                    """,
+                    (
+                        ctx["league_key"],
+                        ctx["team_key"],
+                        yahoo_key,
+                        policy,
+                        notes,
+                    ),
+                )
+                changed += 1
+
+        conn.commit()
+
+    return changed
+
+
+
+tab_lineup, tab_slots, tab_fa, tab_policy = st.tabs(
+    ["Starting Lineup", "Slots", "Batter Free Agents", "Roster Policy"]
 )
 
 with tab_lineup:
@@ -1529,3 +1718,25 @@ with tab_fa:
 
 st.divider()
 st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | H2H=Matchup | S=Status")
+
+
+with tab_policy:
+    st.subheader("Roster Policy")
+    st.caption(
+        "Manual safety layer for future add/drop automation. "
+        "KEEPER = never consider dropping. "
+        "DROPPABLE_HIGH = only consider with strong evidence. "
+        "DROPPABLE_LOW = actively evaluate against free agents."
+    )
+
+    st.markdown(
+        "**Color guide:** 🔵 Keeper &nbsp;&nbsp; 🟠 Droppable High &nbsp;&nbsp; 🟢 Droppable Low"
+    )
+
+    policy_rows = fetch_roster_policy_rows(ctx)
+
+    if not policy_rows:
+        st.info("No roster policy rows found for the current roster/date.")
+    else:
+        _render_policy_editor(ctx, policy_rows, "Batter")
+
