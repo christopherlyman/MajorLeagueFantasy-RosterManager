@@ -1306,16 +1306,21 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
         if slot == "P":
             elapsed = max(1, (active_day - USUAL_CAP_PROJECTION_SEASON_START).days)
             total = max(1, (USUAL_CAP_PROJECTION_SEASON_END - USUAL_CAP_PROJECTION_SEASON_START).days)
-            projected = min(max_allowed, used / elapsed * total)
+            # Best observed Yahoo-style pitcher cap model:
+            # raw pace capped to max, then conservative -2 IP adjustment.
+            projected = max(0.0, min(max_allowed, used / elapsed * total) - 2.0)
         elif slot == "OF":
             # Best observed Yahoo-style hitter model:
             # OF behaves as a 3-slot pool and appears to include today.
             projected = min(max_allowed, used + top_n_eligible_future("OF", 3, today) + 1)
         elif slot == "IF":
             future = max(occupant_future("IF", tomorrow), best_eligible_future("IF", tomorrow))
-            projected = min(max_allowed, used + future)
+            projected = min(max_allowed, used + max(0, future - 1))
         elif slot == "UTIL":
             projected = min(max_allowed, used + occupant_future("UTIL", today))
+        elif slot in {"3B", "SS"}:
+            future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
+            projected = min(max_allowed, used + max(0, future - 1))
         else:
             future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
             projected = min(max_allowed, used + future)
