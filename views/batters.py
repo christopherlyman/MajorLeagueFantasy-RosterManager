@@ -462,9 +462,25 @@ def slot_min_ranking(slot_id: str, slot_type: str) -> float:
         return 1.0
 
     try:
-        return float(_CURRENT_SLOT_FLOORS.get(slot_type, 50.0))
+        base_threshold = float(_CURRENT_SLOT_FLOORS.get(slot_type, 50.0))
     except Exception:
-        return 50.0
+        base_threshold = 50.0
+
+    ctx_obj = globals().get("ctx") or {}
+    if str(ctx_obj.get("league_key") or "").strip() == USUAL_CAP_USAGE_LEAGUE_KEY:
+        slot = str(slot_type or "").upper()
+        try:
+            diff = float(_CURRENT_SLOT_ASSIGNMENT_DIFFS.get(slot, 0.0) or 0.0)
+        except Exception:
+            diff = 0.0
+
+        # Usual-RMT rule:
+        # Only enforce the start threshold when the slot is projected ahead by at least +1.
+        # If the slot is even or behind pace, maximize total lineup rank instead.
+        if diff < 1.0:
+            return 0.0
+
+    return base_threshold
 
 
 def startable_for_slot(row: dict, slot_id: str, slot_type: str) -> bool:
@@ -1296,7 +1312,8 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
             # OF behaves as a 3-slot pool and appears to include today.
             projected = min(max_allowed, used + top_n_eligible_future("OF", 3, today) + 1)
         elif slot == "IF":
-            projected = min(max_allowed, used + occupant_future("IF", tomorrow))
+            future = max(occupant_future("IF", tomorrow), best_eligible_future("IF", tomorrow))
+            projected = min(max_allowed, used + future)
         elif slot == "UTIL":
             projected = min(max_allowed, used + occupant_future("UTIL", today))
         else:
