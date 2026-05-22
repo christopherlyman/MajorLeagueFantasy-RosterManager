@@ -1309,18 +1309,18 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
             # Best observed Yahoo-style pitcher cap model:
             # raw pace capped to max, then conservative -2 IP adjustment.
             projected = max(0.0, min(max_allowed, used / elapsed * total) - 2.0)
-        elif slot == "OF":
-            # Best observed Yahoo-style hitter model:
-            # OF behaves as a 3-slot pool and appears to include today.
-            projected = min(max_allowed, used + top_n_eligible_future("OF", 3, today) + 1)
-        elif slot == "IF":
-            future = max(occupant_future("IF", tomorrow), best_eligible_future("IF", tomorrow))
-            projected = min(max_allowed, used + max(0, future - 1))
-        elif slot == "UTIL":
-            projected = min(max_allowed, used + occupant_future("UTIL", today))
-        elif slot in {"3B", "SS"}:
-            future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
-            projected = min(max_allowed, used + max(0, future - 1))
+        elif slot in {"C", "1B", "2B", "3B", "SS", "IF", "UTIL", "OF"}:
+            # Best observed Yahoo-style hitter cap model:
+            # Use one shared future-games baseline derived from the active hitter occupants.
+            # Yahoo appears to allow hitter projections to exceed Max.
+            active_hitter_games = [
+                games_for_team(row["team"], today)
+                for row in current_slots
+                if row["slot"] in {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
+            ]
+            single_future = int(round(sum(active_hitter_games) / len(active_hitter_games))) if active_hitter_games else 0
+            future = single_future * 3 if slot == "OF" else single_future
+            projected = used + future
         else:
             future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
             projected = min(max_allowed, used + future)
