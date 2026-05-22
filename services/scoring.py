@@ -19,6 +19,8 @@ LEAGUE_AVG_BASELINE = 0.2547142857142857
 
 HAND_SMALL_EDGE = 0.030
 HAND_CLEAR_EDGE = 0.060
+HAND_OPS_GAP_SCALE = 25.0
+HAND_OPS_GAP_MAX_POINTS = 12.0
 
 HOME_AWAY_SMALL_EDGE = 0.025
 HOME_AWAY_CLEAR_EDGE = 0.050
@@ -196,27 +198,42 @@ def _context_split_points(
     return round(points, 2)
 
 
+def _hand_ops_gap_confidence(split_ab: Any) -> float:
+    ab = _num(split_ab)
+    if ab < 10:
+        return 0.25
+    if ab < 25:
+        return 0.50
+    if ab < 50:
+        return 0.75
+    return 1.00
+
+
+def _hand_ops_gap_points(active_ops: Any, overall_ops: Any, split_ab: Any) -> float:
+    active = _num(active_ops)
+    overall = _num(overall_ops)
+
+    if active <= 0.0 or overall <= 0.0:
+        return 0.0
+
+    confidence = _hand_ops_gap_confidence(split_ab)
+    points = (active - overall) * HAND_OPS_GAP_SCALE * confidence
+    return round(_clamp(points, -HAND_OPS_GAP_MAX_POINTS, HAND_OPS_GAP_MAX_POINTS), 2)
+
+
 def compute_handedness_points(row: Mapping[str, Any]) -> float:
     throws = str(row.get("opp_pitcher_throws") or "").strip().upper()
     if throws == "R":
-        return _context_split_points(
+        return _hand_ops_gap_points(
             row.get("split_vs_rhp_ops"),
             row.get("overall_ops"),
             row.get("split_vs_rhp_ab"),
-            shrink_k=150.0,
-            small_edge=HAND_SMALL_EDGE,
-            clear_edge=HAND_CLEAR_EDGE,
-            max_points=HAND_MAX_POINTS,
         )
     if throws == "L":
-        return _context_split_points(
+        return _hand_ops_gap_points(
             row.get("split_vs_lhp_ops"),
             row.get("overall_ops"),
             row.get("split_vs_lhp_ab"),
-            shrink_k=150.0,
-            small_edge=HAND_SMALL_EDGE,
-            clear_edge=HAND_CLEAR_EDGE,
-            max_points=HAND_MAX_POINTS,
         )
     return 0.0
 
