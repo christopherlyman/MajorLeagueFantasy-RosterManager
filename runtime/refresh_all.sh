@@ -511,6 +511,14 @@ cd /app && python scripts/refresh_hitter_splits_mlb.py \
   --out $APP_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv
 "
 
+stage "REFRESH ALL: PROJECTION GAME CONTEXT"
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
+cd /app && PYTHONPATH=/app python scripts/refresh_projection_game_context.py \
+  --base-date $TODAY \
+  --days 3 \
+  --derived-root $APP_DERIVED_ROOT
+"
+
 stage "REFRESH ALL: VERIFY BASELINES"
 echo '--- recent ---'
 sed -n '1,20p' "$HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"

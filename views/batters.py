@@ -880,6 +880,39 @@ def _projection_caption(projection_view: str) -> str:
     return f"{projection_view} is projected. Lineups are not confirmed and Yahoo transactions are not implied."
 
 
+def _render_projection_explainer(projection_view: str) -> None:
+    if projection_view == "Today":
+        st.caption(
+            "Today uses the current roster/free-agent rows, current game context, and posted lineup status when available."
+        )
+        return
+
+    with st.expander("What goes into this projected rank?", expanded=False):
+        st.markdown(
+            """
+Future batter ranks are calculated by the RMT model, not pulled from Yahoo as future rankings.
+
+Inputs used:
+- today's real owned roster or today's true free-agent pool
+- future game date
+- opponent
+- home/away
+- game time
+- opposing probable pitcher
+- probable pitcher handedness
+- batter vs RHP / vs LHP splits
+- home/away splits
+- day/night splits
+- batter and pitcher Savant inputs
+- recent 7-day form
+- Start% / recent-start reliability
+- H2H matchup adjustment when available
+
+Future views are planning projections. Lineups are not confirmed, probable pitchers can change, and Yahoo add/drop actions are not implied.
+"""
+        )
+
+
 ctx = get_runtime_context()
 
 try:
@@ -1695,6 +1728,7 @@ with tab_lineup:
         key=f"lineup_projection_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
     )
     st.caption(_projection_caption(lineup_projection_view))
+    _render_projection_explainer(lineup_projection_view)
 
     if lineup_projection_view == "Today":
         display_assignment = assignment
@@ -1791,6 +1825,7 @@ with tab_fa:
             key=f"fa_projection_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
         )
         st.caption(_projection_caption(fa_projection_view))
+        _render_projection_explainer(fa_projection_view)
 
         if "fa_slot_filter" not in st.session_state:
             st.session_state["fa_slot_filter"] = "All"

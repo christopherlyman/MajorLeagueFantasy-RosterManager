@@ -175,6 +175,14 @@ cd /app && PYTHONPATH=/app python scripts/refresh_probable_pitcher_hand.py \
   --out $APP_DERIVED_ROOT/opposing_probable_pitchers_with_hand_${TODAY}.csv
 "
 
+stage "REFRESH PROJECTION GAME CONTEXT"
+docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
+cd /app && PYTHONPATH=/app python scripts/refresh_projection_game_context.py \
+  --base-date $TODAY \
+  --days 3 \
+  --derived-root $APP_DERIVED_ROOT
+"
+
 stage "VERIFY COUNTS"
 ROSTER_COUNT=$(docker exec -i mlf_postgres psql -U mlf -d mlf -tA -c "
 SELECT count(*)
