@@ -858,9 +858,11 @@ def _project_batter_row(row: dict, projection_row: dict | None, projection_view:
     except Exception:
         projected["ranking_band"] = ""
 
-    projected["game_display"] = projection_row.get(game_field) or ""
+    projected_game = projection_row.get(game_field) or ""
+    projected["game_display"] = projected_game
     projected["opposing_probable_pitcher"] = ""
     projected["lineup_status"] = "PROJECTED"
+    projected["game_status"] = "GAME_FOUND" if projected_game and projected_game != "No game" else "NO_GAME_TODAY"
     projected["note_short"] = projection_row.get(note_field) or ""
     projected["projection_view"] = projection_view
 
