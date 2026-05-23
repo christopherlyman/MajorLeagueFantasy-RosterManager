@@ -15,6 +15,8 @@ import re
 from views.shared_refresh import render_refresh_sidebar
 
 from services.db import get_connection
+from services.batter_multiday import build_batter_multiday_projection
+from services.scoring import ranking_band
 from services.queries import (
     fetch_available_batter_rows,
     fetch_batter_roster_rows,
@@ -818,6 +820,66 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
     return out
 
 
+BATTER_PROJECTION_VIEW_OPTIONS = ["Today", "Tomorrow", "Day After Tomorrow"]
+BATTER_PROJECTION_FIELD_MAP = {
+    "Today": ("Today", "TodayGame", "TodayLineup", "TodayNote"),
+    "Tomorrow": ("Tomorrow", "TomorrowGame", "", "TomorrowNote"),
+    "Day After Tomorrow": ("Day2", "Day2Game", "", "Day2Note"),
+}
+
+
+def _projection_lookup(multiday_result: dict | None, pool: str) -> dict[str, dict]:
+    if not multiday_result:
+        return {}
+
+    wanted = str(pool or "").upper()
+    return {
+        str(row.get("YahooKey") or ""): row
+        for row in multiday_result.get("rows", [])
+        if str(row.get("Pool") or "").upper() == wanted
+    }
+
+
+def _project_batter_row(row: dict, projection_row: dict | None, projection_view: str) -> dict:
+    if projection_view == "Today" or not projection_row:
+        return row
+
+    rank_field, game_field, _lineup_field, note_field = BATTER_PROJECTION_FIELD_MAP[projection_view]
+    projected = dict(row)
+
+    projected_rank = projection_row.get(rank_field)
+    try:
+        projected_rank_value = int(round(float(projected_rank or 0)))
+    except Exception:
+        projected_rank_value = ""
+    projected["ranking"] = projected_rank_value
+    try:
+        projected["ranking_band"] = ranking_band(float(projected_rank_value or 0))
+    except Exception:
+        projected["ranking_band"] = ""
+
+    projected["game_display"] = projection_row.get(game_field) or ""
+    projected["opposing_probable_pitcher"] = ""
+    projected["lineup_status"] = "PROJECTED"
+    projected["note_short"] = projection_row.get(note_field) or ""
+    projected["projection_view"] = projection_view
+
+    return projected
+
+
+def _project_batter_rows(rows: list[dict], lookup: dict[str, dict], projection_view: str) -> list[dict]:
+    return [
+        _project_batter_row(row, lookup.get(str(row.get("yahoo_player_key") or "")), projection_view)
+        for row in rows
+    ]
+
+
+def _projection_caption(projection_view: str) -> str:
+    if projection_view == "Today":
+        return "Today uses live/current ranking inputs."
+    return f"{projection_view} is projected. Lineups are not confirmed and Yahoo transactions are not implied."
+
+
 ctx = get_runtime_context()
 
 try:
@@ -1426,6 +1488,12 @@ def _style_combined_roster_row(row):
 
 combined_roster_styler = combined_roster_df.style.apply(_style_combined_roster_row, axis=1)
 
+try:
+    batter_multiday_projection = build_batter_multiday_projection(ctx, days=3, include_fa=True)
+except Exception as exc:
+    batter_multiday_projection = None
+    st.warning(f"3-day batter projection unavailable: {exc}")
+
 
 ROSTER_POLICY_STATUSES = ["KEEPER", "DROPPABLE_HIGH", "DROPPABLE_LOW"]
 
@@ -1620,17 +1688,42 @@ tab_lineup, tab_slots, tab_fa, tab_policy = st.tabs(
 )
 
 with tab_lineup:
-    total_score = sum(int(r["ranking"]) for r in assignment.values() if r)
+    lineup_projection_view = st.radio(
+        "Projection View",
+        options=BATTER_PROJECTION_VIEW_OPTIONS,
+        horizontal=True,
+        key=f"lineup_projection_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+    )
+    st.caption(_projection_caption(lineup_projection_view))
+
+    if lineup_projection_view == "Today":
+        display_assignment = assignment
+        display_rows = rows
+        display_combined_roster_rows = combined_roster_rows
+        display_styler = combined_roster_styler
+    else:
+        owned_projection_lookup = _projection_lookup(batter_multiday_projection, "OWNED")
+        projected_rows = _project_batter_rows(rows, owned_projection_lookup, lineup_projection_view)
+        projected_active_rows = [r for r in projected_rows if not is_unavailable(r)]
+        display_assignment = optimize_lineup(projected_active_rows, manual_choices)
+        display_combined_roster_rows = (
+            build_starting_lineup_table(display_assignment)
+            + build_bench_table(projected_rows, display_assignment)
+        )
+        display_df = pd.DataFrame(display_combined_roster_rows)
+        display_styler = display_df.style.apply(_style_combined_roster_row, axis=1)
+
+    total_score = sum(int(r["ranking"]) for r in display_assignment.values() if r)
     st.subheader(f"Optimized starting lineup score: {total_score}")
     st.caption("All game times Eastern.")
-    roster_table_height = max(420, 35 * (len(combined_roster_rows) + 1) + 3)
+    roster_table_height = max(420, 35 * (len(display_combined_roster_rows) + 1) + 3)
     st.dataframe(
-        combined_roster_styler,
+        display_styler,
         width="content",
         height=roster_table_height,
         hide_index=True,
         column_config=BATTER_LINEUP_COLUMN_CONFIG,
-        key=f"combined_roster_{ctx['as_of_date']}_{len(combined_roster_rows)}",
+        key=f"combined_roster_{ctx['as_of_date']}_{lineup_projection_view}_{len(display_combined_roster_rows)}",
     )
 
 with tab_slots:
@@ -1691,6 +1784,14 @@ with tab_fa:
     if not available_batters:
         st.info("Batter free-agent backend is not wired yet, so this tab is a placeholder for now.")
     else:
+        fa_projection_view = st.radio(
+            "Projection View",
+            options=BATTER_PROJECTION_VIEW_OPTIONS,
+            horizontal=True,
+            key=f"fa_projection_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+        )
+        st.caption(_projection_caption(fa_projection_view))
+
         if "fa_slot_filter" not in st.session_state:
             st.session_state["fa_slot_filter"] = "All"
 
@@ -1703,6 +1804,7 @@ with tab_fa:
             label_visibility="collapsed",
             key="fa_slot_filter",
         )
+
         def fa_matches_filter(row, slot):
             if slot == "All":
                 return True
@@ -1713,7 +1815,17 @@ with tab_fa:
                 )
             return eligible_for_slot(row, slot)
 
-        filtered_batters = [r for r in available_batters if fa_matches_filter(r, current_filter)]
+        fa_projection_lookup = _projection_lookup(batter_multiday_projection, "FA")
+        projected_available_batters = _project_batter_rows(
+            available_batters,
+            fa_projection_lookup,
+            fa_projection_view,
+        )
+        filtered_batters = [
+            r for r in projected_available_batters
+            if fa_matches_filter(r, current_filter)
+        ]
+        filtered_batters.sort(key=lambda r: -float(r.get("ranking") or 0))
 
         st.caption(f"Filter: {current_filter} | Free Agents: {len(filtered_batters)}")
 
@@ -1735,7 +1847,7 @@ with tab_fa:
             width="content",
             hide_index=True,
             column_config=BATTER_FA_COLUMN_CONFIG,
-            key=f"fa_batters_{ctx['as_of_date']}_{len(fa_rows)}",
+            key=f"fa_batters_{ctx['as_of_date']}_{fa_projection_view}_{current_filter}_{len(fa_rows)}",
         )
 
 st.divider()
