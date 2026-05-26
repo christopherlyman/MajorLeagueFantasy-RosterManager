@@ -431,10 +431,7 @@ active_batter_rows = [r for r in batter_rows if is_active(r)]
 
 if mode == "daily":
     game_teams, meta = load_daily_context()
-    rows = [
-        r for r in active_batter_rows
-        if rank_owned_ok(r, meta)
-    ]
+    rows = list(active_batter_rows)
 
     def fa_sort_key(row):
         m = meta.get(row["yahoo_player_key"], {})
@@ -448,10 +445,10 @@ if mode == "daily":
             owned = 0.0
         return (rank, -owned, row.get("player_name") or "")
 
-    rows = sorted(rows, key=fa_sort_key)[:100]
+    rows = sorted(rows, key=fa_sort_key)
 else:
     game_teams, meta = set(), {}
-    rows = active_batter_rows[:100]
+    rows = list(active_batter_rows)
 
 out.parent.mkdir(parents=True, exist_ok=True)
 with out.open("w", newline="", encoding="utf-8") as f:

@@ -86,6 +86,17 @@ def _hitter_game_used_from_cache(row) -> int:
     )
 
 
+def _hitter_games_from_yahoo_stat_map(stat_map: dict[str, str]) -> int | None:
+    if not stat_map:
+        return None
+
+    games_raw = str(stat_map.get("0") or "").strip()
+    if games_raw and games_raw != "-":
+        return _safe_int(games_raw)
+
+    return None
+
+
 def _hitter_game_used_from_yahoo_stat_map(stat_map: dict[str, str]) -> int | None:
     """
     Return:
@@ -114,6 +125,10 @@ def _hitter_game_used_from_yahoo_stat_map(stat_map: dict[str, str]) -> int | Non
     """
     if not stat_map:
         return None
+
+    games = _hitter_games_from_yahoo_stat_map(stat_map)
+    if games is not None:
+        return games
 
     h_ab = str(stat_map.get("60") or "").strip()
     if h_ab and h_ab != "-":
@@ -536,27 +551,35 @@ def main() -> None:
         key = str(r["yahoo_player_key"])
         slot = _norm_slot(r["selected_position"])
         stat_map = yahoo_stat_maps.get(key, {})
-        used_from_yahoo = _hitter_game_used_from_yahoo_stat_map(stat_map)
         source = "yahoo_team_roster_daily_stats_hitter"
 
-        if used_from_yahoo is None:
-            direct_stat_map = direct_player_stat_maps.get(key)
-            if direct_stat_map is None:
-                direct_stat_map = _fetch_yahoo_player_daily_stat_map(key, usage_date)
-                direct_player_stat_maps[key] = direct_stat_map
+        direct_stat_map = direct_player_stat_maps.get(key)
+        if direct_stat_map is None:
+            direct_stat_map = _fetch_yahoo_player_daily_stat_map(key, usage_date)
+            direct_player_stat_maps[key] = direct_stat_map
 
-            direct_used = _hitter_game_used_from_yahoo_stat_map(direct_stat_map)
+        direct_games = _hitter_games_from_yahoo_stat_map(direct_stat_map)
 
-            if direct_used is not None:
-                stat_map = direct_stat_map
-                used = direct_used
-                source = "yahoo_player_daily_stats_hitter"
-            else:
-                cache_row = batter_cache.get(key)
-                used = _hitter_game_used_from_cache(cache_row)
-                source = "rmt.yahoo_batter_daily_stat_cache_fallback"
+        if direct_games is not None:
+            stat_map = direct_stat_map
+            used = direct_games
+            source = "yahoo_player_daily_stats_games_stat_0"
         else:
-            used = used_from_yahoo
+            used_from_yahoo = _hitter_game_used_from_yahoo_stat_map(stat_map)
+
+            if used_from_yahoo is not None:
+                used = used_from_yahoo
+            else:
+                direct_used = _hitter_game_used_from_yahoo_stat_map(direct_stat_map)
+
+                if direct_used is not None:
+                    stat_map = direct_stat_map
+                    used = direct_used
+                    source = "yahoo_player_daily_stats_hitter"
+                else:
+                    cache_row = batter_cache.get(key)
+                    used = _hitter_game_used_from_cache(cache_row)
+                    source = "rmt.yahoo_batter_daily_stat_cache_fallback"
 
         usage_by_slot[slot] = usage_by_slot.get(slot, Decimal("0")) + Decimal(used)
         hitter_detail.append(

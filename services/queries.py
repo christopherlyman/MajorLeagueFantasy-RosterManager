@@ -629,7 +629,19 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
             else:
                 base["note_short"] = "Unavailable"
         elif base["is_doubleheader"]:
-            base["note_short"] = "Doubleheader"
+            reason = " | ".join(
+                [
+                    f"Bat {baseline_points:+.1f}",
+                    f"Pitcher {pitcher_points:+.1f}",
+                    f"Hand {handedness_points:+.1f}",
+                    f"Home/Away {home_away_points:+.1f}",
+                    f"Day/Night {day_night_points:+.1f}",
+                    f"Recent {recent_form_points:+.1f}",
+                    f"Status {status_risk_points:+.1f}",
+                    f"Lineup {lineup_points:+.1f}",
+                ]
+            )
+            base["note_short"] = f"Doubleheader | {reason}"
 
         collapsed.append(base)
 
@@ -1006,17 +1018,6 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
             )
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    candidate_keys = _load_true_free_agent_candidate_keys(as_of_date)
-    if candidate_keys:
-        rows = [
-            r for r in rows
-            if (
-                normalize_name(str(r.get("player_name") or "")),
-                str(r.get("mlb_team_abbr") or "").strip().upper(),
-            ) in candidate_keys
-        ]
-
-
     year = _season_year(as_of_date)
     hitter_savant = _load_savant_map("batters", year)
     pitcher_savant = _load_savant_map("pitchers", year)
