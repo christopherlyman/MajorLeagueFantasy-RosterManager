@@ -28,6 +28,7 @@ if APP_ALIAS != "usual-rmt":
 
 PITCHER_LINEUP_COLUMN_CONFIG.update(
     {
+        "% Ros": st.column_config.TextColumn("% Ros"),
         "Game / Usage": st.column_config.TextColumn("Game / Usage"),
         "Status": st.column_config.TextColumn("Status"),
         "Rank": st.column_config.TextColumn("Rank"),
@@ -79,12 +80,23 @@ def _game_usage_text(row: dict) -> str:
     return "Game context: not loaded"
 
 
+
+def _format_percent_owned(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.0f}%"
+    except Exception:
+        return ""
+
+
 def build_pitcher_table(rows: list[dict]) -> list[dict]:
     out = []
     for row in rows:
         display_row = {
             "Slot": row.get("selected_position", ""),
             "Pitcher": _pitcher_display(row),
+            "% Ros": _format_percent_owned(row.get("percent_owned")),
         }
 
         if APP_ALIAS != "usual-rmt":

@@ -46,6 +46,7 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                         r.eligible_positions,
                         r.status,
                         r.status_full,
+                        pool.percent_owned,
                         p.era,
                         p.whip,
                         p.w,
@@ -56,6 +57,10 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                     FROM lineup_tool.roster_snapshot r
                     LEFT JOIN pstats p
                       ON p.yahoo_player_key = r.yahoo_player_key
+                    LEFT JOIN public.yahoo_league_player_pool pool
+                      ON pool.league_key = r.league_key
+                     AND pool.season_year = %s
+                     AND pool.yahoo_player_key = r.yahoo_player_key
                     WHERE r.league_key = %s
                       AND r.team_key = %s
                       AND r.as_of_date = %s
@@ -74,7 +79,7 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                             ELSE 9
                         END,
                         r.full_name;
-                """, (league_key, season_year, league_key, team_key, as_of_date))
+                """, (league_key, season_year, season_year, league_key, team_key, as_of_date))
             else:
                 cur.execute("""
                     WITH pstats AS (
@@ -102,6 +107,7 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                         r.eligible_positions,
                         r.status,
                         r.status_full,
+                        pool.percent_owned,
                         p.era,
                         p.whip,
                         p.w,
@@ -113,6 +119,10 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                     FROM lineup_tool.roster_snapshot r
                     LEFT JOIN pstats p
                       ON p.yahoo_player_key = r.yahoo_player_key
+                    LEFT JOIN public.yahoo_league_player_pool pool
+                      ON pool.league_key = r.league_key
+                     AND pool.season_year = %s
+                     AND pool.yahoo_player_key = r.yahoo_player_key
                     WHERE r.league_key = %s
                       AND r.team_key = %s
                       AND r.as_of_date = %s
@@ -133,7 +143,7 @@ def fetch_owned_pitcher_rows(league_key: str, team_key: str, as_of_date: str) ->
                             ELSE 9
                         END,
                         r.full_name;
-                """, (league_key, season_year, league_key, team_key, as_of_date))
+                """, (league_key, season_year, season_year, league_key, team_key, as_of_date))
 
             columns = [desc[0] for desc in cur.description]
             rows = [dict(zip(columns, row)) for row in cur.fetchall()]
@@ -228,6 +238,20 @@ def fetch_available_pitcher_rows(league_key: str, team_key: str, as_of_date: str
             for db_row in cur.fetchall():
                 stat_row = dict(zip(columns, db_row))
                 by_key[stat_row["yahoo_player_key"]].update(stat_row)
+
+            cur.execute("""
+                SELECT yahoo_player_key, percent_owned, rank_value
+                FROM public.yahoo_league_player_pool
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = ANY(%s)
+            """, (league_key, season_year, player_keys))
+            for yahoo_player_key, percent_owned, rank_value in cur.fetchall():
+                key = str(yahoo_player_key)
+                if key in by_key:
+                    by_key[key]["percent_owned"] = percent_owned
+                    if not by_key[key].get("yahoo_rank"):
+                        by_key[key]["yahoo_rank"] = rank_value
 
     rows = list(by_key.values())
     for row in rows:

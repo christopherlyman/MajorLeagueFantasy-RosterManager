@@ -721,6 +721,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         r.eligible_positions,
         COALESCE(r.status, '') AS status,
         r.yahoo_player_key,
+        p.percent_owned,
         CASE
             WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = r.mlb_team_abbr
                 THEN g.home_probable_pitcher_name
@@ -748,6 +749,10 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
     LEFT JOIN games g
       ON g.raw_json->'teams'->'away'->'team'->>'abbreviation' = r.mlb_team_abbr
       OR g.raw_json->'teams'->'home'->'team'->>'abbreviation' = r.mlb_team_abbr
+    LEFT JOIN public.yahoo_league_player_pool p
+      ON p.league_key = r.league_key
+     AND p.season_year = %s
+     AND p.yahoo_player_key = r.yahoo_player_key
     WHERE r.as_of_date = %s
       AND r.league_key = %s
       AND r.team_key = %s
@@ -763,7 +768,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
             )
             day_game_rows = cur.fetchone()[0]
 
-            cur.execute(sql, (as_of_date, as_of_date, league_key, team_key))
+            cur.execute(sql, (as_of_date, _season_year(as_of_date), as_of_date, league_key, team_key))
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 

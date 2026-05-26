@@ -64,6 +64,7 @@ BATTER_LINEUP_COLUMN_CONFIG = {
     "Threshold": st.column_config.TextColumn("Threshold"),
     "Player": st.column_config.TextColumn("Player"),
     "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
+    "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
     "Band": st.column_config.TextColumn("Band"),
     "Game": st.column_config.TextColumn("Game"),
@@ -76,6 +77,7 @@ BATTER_SLOT_COLUMN_CONFIG = {
     "Player": st.column_config.TextColumn("Player"),
     "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
     "Eligible": st.column_config.TextColumn("Eligible"),
+    "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
     "Band": st.column_config.TextColumn("Band"),
     "Game": st.column_config.TextColumn("Game"),
@@ -764,6 +766,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
                 "Threshold": str(threshold),
                 "Player": chosen.get("player_display", "") if chosen else "",
                 "Eligible Pos.": chosen.get("eligible_display", "") if chosen else "",
+                "% Ros": _format_percent_owned(chosen.get("percent_owned")) if chosen else "",
                 "Rank": chosen.get("ranking", "") if chosen else "",
                 "Band": chosen.get("ranking_band", "") if chosen else "",
                 "Game": game_with_pitcher(chosen) if chosen else "",
@@ -806,6 +809,7 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
                     "Slot": display_slot,
                     "Player": r.get("player_display", ""),
                     "Eligible Pos.": r.get("eligible_display", ""),
+                    "% Ros": _format_percent_owned(r.get("percent_owned")),
                     "Threshold": "",
                     "Rank": r.get("ranking", ""),
                     "Band": r.get("ranking_band", ""),
@@ -818,6 +822,25 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
     order = {"⬜ BN": 0, "🟨 IL": 1, "🟦 NA": 2}
     out.sort(key=lambda r: (order.get(str(r.get("Slot") or ""), 99), str(r.get("Player") or "")))
     return out
+
+
+
+def _long_dataframe_height(row_count: int, min_height: int = 520) -> int:
+    """Large enough to prefer page scrolling over inner dataframe scrolling."""
+    try:
+        n = int(row_count)
+    except Exception:
+        n = 0
+    return max(min_height, 38 * (n + 1) + 80)
+
+
+def _format_percent_owned(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.0f}%"
+    except Exception:
+        return str(value)
 
 
 BATTER_PROJECTION_VIEW_OPTIONS = ["Today", "Tomorrow", "Day After Tomorrow"]
@@ -1872,6 +1895,7 @@ with tab_fa:
                 {
                     "Player": r.get("player_display", ""),
                     "Eligible": r.get("eligible_display", ""),
+                    "% Ros": _format_percent_owned(r.get("percent_owned")),
                     "Rank": r.get("ranking", ""),
                     "Game": game_with_pitcher(r),
                     "Lineup": r.get("lineup_status", ""),
@@ -1879,9 +1903,12 @@ with tab_fa:
                     "Rank Reason": compress_rank_reason(r.get("note_short", "")),
                 }
             )
+        fa_table_height = _long_dataframe_height(len(fa_rows), min_height=620)
+
         st.dataframe(
             fa_rows,
             width="content",
+            height=fa_table_height,
             hide_index=True,
             column_config=BATTER_FA_COLUMN_CONFIG,
             key=f"fa_batters_{ctx['as_of_date']}_{fa_projection_view}_{current_filter}_{len(fa_rows)}",
