@@ -225,27 +225,35 @@ def _insert_rank_reason_before_status(note: str, new_part: str) -> str:
 
 
 def apply_start_frequency_penalty(row: dict, score: dict, as_of_date: str) -> dict:
-    if str(row.get("lineup_status") or "").strip().upper() != "LINEUP_NOT_CONFIRMED":
-        return score
+    out = dict(score)
 
-    if int(score.get("ranking") or 0) <= 0:
-        return score
+    # Explicit neutral defaults make downstream recommendation logic deterministic.
+    out["start_frequency_starts"] = 0
+    out["start_frequency_days"] = 0
+    out["start_frequency_rate"] = None
+    out["start_frequency_points"] = 0
+
+    if str(row.get("lineup_status") or "").strip().upper() != "LINEUP_NOT_CONFIRMED":
+        return out
+
+    if int(out.get("ranking") or 0) <= 0:
+        return out
 
     starts, days, rate = _hitter_recent_start_rate(row, as_of_date)
     penalty = _start_frequency_penalty(rate)
 
-    if penalty == 0:
-        return score
-
-    out = dict(score)
-    ranking = max(MIN_RANKING, min(MAX_RANKING, int(out.get("ranking") or 0) + penalty))
-
-    out["ranking"] = ranking
-    out["band"] = ranking_band(ranking)
     out["start_frequency_starts"] = starts
     out["start_frequency_days"] = days
     out["start_frequency_rate"] = rate
     out["start_frequency_points"] = penalty
+
+    if penalty == 0:
+        return out
+
+    ranking = max(MIN_RANKING, min(MAX_RANKING, int(out.get("ranking") or 0) + penalty))
+
+    out["ranking"] = ranking
+    out["band"] = ranking_band(ranking)
     out["note_short"] = _insert_rank_reason_before_status(
         str(out.get("note_short") or ""),
         f"Start% {penalty:+.1f}",

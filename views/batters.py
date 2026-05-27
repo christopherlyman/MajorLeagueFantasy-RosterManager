@@ -70,7 +70,16 @@ BATTER_LINEUP_COLUMN_CONFIG = {
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
-    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+    "B": st.column_config.NumberColumn("B", format="%.1f"),
+    "P": st.column_config.NumberColumn("P", format="%.1f"),
+    "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
+    "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
+    "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Start": st.column_config.NumberColumn("Start", format="%.1f"),
+    "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
+    "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
+    "StatusMod": st.column_config.NumberColumn("StatusMod", format="%.1f"),
 }
 
 BATTER_SLOT_COLUMN_CONFIG = {
@@ -83,17 +92,36 @@ BATTER_SLOT_COLUMN_CONFIG = {
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
-    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+    "B": st.column_config.NumberColumn("B", format="%.1f"),
+    "P": st.column_config.NumberColumn("P", format="%.1f"),
+    "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
+    "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
+    "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Start": st.column_config.NumberColumn("Start", format="%.1f"),
+    "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
+    "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
+    "StatusMod": st.column_config.NumberColumn("StatusMod", format="%.1f"),
 }
 
 BATTER_FA_COLUMN_CONFIG = {
     "Player": st.column_config.TextColumn("Player"),
     "Eligible": st.column_config.TextColumn("Eligible"),
+    "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
-    "Rank Reason": st.column_config.TextColumn("Rank Reason"),
+    "B": st.column_config.NumberColumn("B", format="%.1f"),
+    "P": st.column_config.NumberColumn("P", format="%.1f"),
+    "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
+    "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
+    "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Start": st.column_config.NumberColumn("Start", format="%.1f"),
+    "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
+    "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
+    "StatusMod": st.column_config.NumberColumn("StatusMod", format="%.1f"),
 }
 
 
@@ -772,7 +800,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
                 "Game": game_with_pitcher(chosen) if chosen else "",
                 "Lineup": chosen.get("lineup_status", "") if chosen else "",
                 "Status": chosen.get("status_display", "") if chosen else "",
-                "Rank Reason": compress_rank_reason(chosen.get("note_short", "")) if chosen else "",
+                **(_modifier_cells(chosen) if chosen else _empty_modifier_cells()),
             }
         )
     return out
@@ -785,12 +813,13 @@ def build_slot_table(slot_id: str, slot_type: str, rows: list[dict], selected_na
             {
                 "Selected": "✅" if make_player_key(r) == selected_name else "",
                 "Player": r.get("player_display", ""),
+                "% Ros": _format_percent_owned(r.get("percent_owned")),
                 "Rank": r.get("ranking", ""),
                 "Band": r.get("ranking_band", ""),
                 "Game": game_with_pitcher(r),
                 "Lineup": r.get("lineup_status", ""),
                 "Status": r.get("status_display", ""),
-                "Rank Reason": compress_rank_reason(r.get("note_short", "")),
+                **_modifier_cells(r),
             }
         )
     return out
@@ -816,7 +845,7 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
                     "Game": game_with_pitcher(r),
                     "Lineup": r.get("lineup_status", ""),
                     "Status": r.get("status_display", ""),
-                    "Rank Reason": compress_rank_reason(r.get("note_short", "")),
+                    **_modifier_cells(r),
                 }
             )
     order = {"⬜ BN": 0, "🟨 IL": 1, "🟦 NA": 2}
@@ -832,6 +861,63 @@ def _long_dataframe_height(row_count: int, min_height: int = 520) -> int:
     except Exception:
         n = 0
     return max(min_height, 38 * (n + 1) + 80)
+
+
+
+
+
+def _round_modifier(value):
+    if value in (None, ""):
+        return None
+    try:
+        return round(float(value), 1)
+    except Exception:
+        return None
+
+
+def _start_modifier_value(row: dict):
+    """Only expose Start modifier when Start% was semantically evaluated."""
+    try:
+        ranking = float(row.get("ranking") or 0)
+    except Exception:
+        ranking = 0.0
+
+    lineup_status = str(row.get("lineup_status") or "").strip().upper()
+    if lineup_status != "LINEUP_NOT_CONFIRMED" or ranking <= 0:
+        return None
+
+    return _round_modifier(row.get("start_frequency_points"))
+
+
+def _modifier_cells(row: dict) -> dict:
+    row = row or {}
+    return {
+        "B": _round_modifier(row.get("baseline_points")),
+        "P": _round_modifier(row.get("pitcher_points")),
+        "Hand": _round_modifier(row.get("handedness_points")),
+        "H/A": _round_modifier(row.get("home_away_points")),
+        "D/N": _round_modifier(row.get("day_night_points")),
+        "Recent": _round_modifier(row.get("recent_form_points")),
+        "Start": _start_modifier_value(row),
+        "H2H": _round_modifier(row.get("h2h_matchup_points")),
+        "LineupMod": _round_modifier(row.get("lineup_points")),
+        "StatusMod": _round_modifier(row.get("status_risk_points")),
+    }
+
+
+def _empty_modifier_cells() -> dict:
+    return {
+        "B": None,
+        "P": None,
+        "Hand": None,
+        "H/A": None,
+        "D/N": None,
+        "Recent": None,
+        "Start": None,
+        "H2H": None,
+        "LineupMod": None,
+        "StatusMod": None,
+    }
 
 
 def _format_percent_owned(value) -> str:
@@ -1900,7 +1986,7 @@ with tab_fa:
                     "Game": game_with_pitcher(r),
                     "Lineup": r.get("lineup_status", ""),
                     "Status": r.get("status_display", ""),
-                    "Rank Reason": compress_rank_reason(r.get("note_short", "")),
+                    **_modifier_cells(r),
                 }
             )
         fa_table_height = _long_dataframe_height(len(fa_rows), min_height=620)
@@ -1915,9 +2001,6 @@ with tab_fa:
         )
 
 st.divider()
-st.caption("Rank Reason key: B=Bat | P=Pitcher | H=Hand | H/A=Home/Away | D/N=Day/Night | R=Recent | H2H=Matchup | S=Status")
-
-
 with tab_policy:
     st.subheader("Roster Policy")
     st.caption(
