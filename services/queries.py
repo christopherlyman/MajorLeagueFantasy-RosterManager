@@ -1129,6 +1129,60 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
 def fetch_remaining_starts_by_slot(league_key: str, team_key: str, as_of_date: str) -> dict[str, int]:
     season_year = int(str(as_of_date)[:4])
 
+    # Usual Suspects has a newer Yahoo-anchored cap tracker.
+    # Keep other leagues on the legacy path until they get equivalent seed/daily tables.
+    if str(league_key).strip() == "469.l.22528":
+        sql = """
+        WITH seed AS (
+            SELECT
+                league_key,
+                team_key,
+                season_year,
+                slot_family,
+                max_allowed,
+                seed_used,
+                seed_as_of_date
+            FROM rmt.usual_cap_usage_seed
+            WHERE league_key = %s
+              AND team_key = %s
+              AND season_year = %s
+              AND slot_family <> 'P'
+        ),
+        usage_since_seed AS (
+            SELECT
+                u.slot_family,
+                SUM(u.used_value) AS used_since_seed
+            FROM rmt.usual_daily_cap_usage u
+            JOIN seed s
+              ON s.league_key = u.league_key
+             AND s.team_key = u.team_key
+             AND s.slot_family = u.slot_family
+            WHERE u.usage_date > s.seed_as_of_date
+            GROUP BY u.slot_family
+        )
+        SELECT
+            s.slot_family,
+            GREATEST(
+                0,
+                s.max_allowed - (s.seed_used + COALESCE(u.used_since_seed, 0))
+            )::integer AS remaining_starts
+        FROM seed s
+        LEFT JOIN usage_since_seed u
+          ON u.slot_family = s.slot_family
+        ORDER BY s.slot_family
+        """
+
+        out: dict[str, int] = {}
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (league_key, team_key, season_year))
+                rows = cur.fetchall()
+
+        for slot_family, remaining_starts in rows:
+            out[str(slot_family).upper()] = int(remaining_starts)
+
+        return out
+
     sql = """
     WITH seed AS (
         SELECT

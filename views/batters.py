@@ -1876,7 +1876,7 @@ with tab_slots:
 
     auto_remaining_preview = get_remaining_starts(ctx["league_key"], ctx["team_key"], ctx["as_of_date"])
     with st.expander("Slot cap source", expanded=False):
-        st.caption("Auto from slot_usage_seed + roster_snapshot. Use manual override only if you need to reconcile.")
+        st.caption("Auto from cap usage tracker. Usual uses rmt.usual_cap_usage_seed + rmt.usual_daily_cap_usage; other leagues use legacy slot_usage_seed.")
         st.caption(format_remaining_starts_caption(auto_remaining_preview))
         st.checkbox("Use manual slot override", value=False, key="use_manual_slot_override")
         if st.session_state.get("use_manual_slot_override", False):
