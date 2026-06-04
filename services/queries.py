@@ -771,6 +771,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         COALESCE(r.status, '') AS status,
         r.yahoo_player_key,
         p.percent_owned,
+        COALESCE(rp.policy_status, 'DROPPABLE_LOW') AS policy_status,
         CASE
             WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = r.mlb_team_abbr
                 THEN g.home_probable_pitcher_name
@@ -802,6 +803,10 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
       ON p.league_key = r.league_key
      AND p.season_year = %s
      AND p.yahoo_player_key = r.yahoo_player_key
+    LEFT JOIN rmt.roster_player_policy rp
+      ON rp.league_key = r.league_key
+     AND rp.team_key = r.team_key
+     AND rp.yahoo_player_key = r.yahoo_player_key
     WHERE r.as_of_date = %s
       AND r.league_key = %s
       AND r.team_key = %s
