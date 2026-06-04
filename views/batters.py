@@ -1610,25 +1610,31 @@ def _style_combined_roster_row(row):
     styles = [""] * len(row)
     cols = list(row.index)
 
-    rank_raw = row.get("Rank", "")
-    threshold_raw = row.get("Threshold", "")
+    slot = str(row.get("Slot") or "").strip().upper()
+    active_slots = {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
+    is_active_slot = slot in active_slots or slot.startswith("OF") or slot.startswith("UTIL")
 
-    try:
-        rank_val = float(rank_raw)
-        threshold_val = float(threshold_raw)
-    except Exception:
+    # Only color selected starting-lineup rows. Bench rows remain neutral.
+    if not is_active_slot:
+        if "Rank" in cols:
+            styles[cols.index("Rank")] += " font-weight: 600;"
         return styles
 
-    if rank_val > threshold_val:
+    lineup = str(row.get("Lineup") or "")
+
+    if lineup == "IN_POSTED_LINEUP":
         row_style = "background-color: #17351f; color: #d7f5df;"
-    elif rank_val == threshold_val:
+    elif lineup == "POSTED_BUT_NOT_FOUND" or "RW Expected Out" in lineup or "RW Posted Out" in lineup:
+        row_style = "background-color: #4a232b; color: #ffd9df;"
+    elif "RW Expected In" in lineup or "RW Posted In" in lineup:
         row_style = "background-color: #3a3217; color: #f7efc6;"
     else:
-        row_style = "background-color: #4a232b; color: #ffd9df;"
+        row_style = ""
 
-    for i, col in enumerate(cols):
-        if col not in {"Slot", "Threshold"}:
-            styles[i] = row_style
+    if row_style:
+        for i, col in enumerate(cols):
+            if col != "Slot":
+                styles[i] = row_style
 
     if "Rank" in cols:
         styles[cols.index("Rank")] += " font-weight: 600;"
