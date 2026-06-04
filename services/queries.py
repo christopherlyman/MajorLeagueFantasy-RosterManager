@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from services.db import get_connection
 from services.scoring import compute_usual_suspects_batter_ranking, ranking_band, START_WORTHY_THRESHOLD, MIN_RANKING, MAX_RANKING
 from services.h2h_matchup import apply_h2h_matchup_score
+from services.rotowire_lineups import rotowire_lineup_advisory
 
 SLOT_ORDER = {
     "C": 1,
@@ -257,6 +258,46 @@ def apply_start_frequency_penalty(row: dict, score: dict, as_of_date: str) -> di
     out["note_short"] = _insert_rank_reason_before_status(
         str(out.get("note_short") or ""),
         f"Start% {penalty:+.1f}",
+    )
+
+    return out
+
+
+
+def apply_rotowire_expected_out_penalty(
+    row: dict,
+    score: dict,
+    target_date: str,
+    as_of_date: str,
+    penalty: int = -10,
+) -> dict:
+    out = dict(score)
+    out["rotowire_expected_out_points"] = 0
+
+    # RotoWire expected-lineup signal is only valid for today.
+    if str(target_date) != str(as_of_date):
+        return out
+
+    if str(row.get("lineup_status") or "").strip().upper() != "LINEUP_NOT_CONFIRMED":
+        return out
+
+    if int(out.get("ranking") or 0) <= 0:
+        return out
+
+    if rotowire_lineup_advisory(row) != "RW Expected Out":
+        return out
+
+    ranking = max(MIN_RANKING, min(MAX_RANKING, int(out.get("ranking") or 0) + penalty))
+    band = ranking_band(ranking)
+
+    out["ranking"] = ranking
+    out["band"] = band
+    out["ranking_band"] = band
+    out["rotowire_expected_out_points"] = penalty
+    out["lineup_points"] = round(float(out.get("lineup_points") or 0.0) + penalty, 2)
+    out["note_short"] = _insert_rank_reason_before_status(
+        str(out.get("note_short") or ""),
+        f"RW Expected Out {penalty:+.1f}",
     )
 
     return out
@@ -867,6 +908,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
 
         score = compute_usual_suspects_batter_ranking(r)
         score = apply_start_frequency_penalty(r, score, as_of_date)
+        score = apply_rotowire_expected_out_penalty(r, score, as_of_date, as_of_date)
         score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
 
@@ -1118,6 +1160,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
 
         score = compute_usual_suspects_batter_ranking(r)
         score = apply_start_frequency_penalty(r, score, as_of_date)
+        score = apply_rotowire_expected_out_penalty(r, score, as_of_date, as_of_date)
         score = apply_h2h_matchup_score(r, score, league_key, team_key, as_of_date)
         r.update(score)
         r["comparison_delta"] = ""

@@ -16,6 +16,7 @@ from views.shared_refresh import render_refresh_sidebar
 
 from services.db import get_connection
 from services.batter_multiday import build_batter_multiday_projection
+from services.rotowire_lineups import lineup_status_with_rotowire
 from services.scoring import ranking_band
 from services.queries import (
     fetch_available_batter_rows,
@@ -798,7 +799,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
                 "Rank": chosen.get("ranking", "") if chosen else "",
                 "Band": chosen.get("ranking_band", "") if chosen else "",
                 "Game": game_with_pitcher(chosen) if chosen else "",
-                "Lineup": chosen.get("lineup_status", "") if chosen else "",
+                "Lineup": _lineup_display(chosen) if chosen else "",
                 "Status": chosen.get("status_display", "") if chosen else "",
                 **(_modifier_cells(chosen) if chosen else _empty_modifier_cells()),
             }
@@ -817,7 +818,7 @@ def build_slot_table(slot_id: str, slot_type: str, rows: list[dict], selected_na
                 "Rank": r.get("ranking", ""),
                 "Band": r.get("ranking_band", ""),
                 "Game": game_with_pitcher(r),
-                "Lineup": r.get("lineup_status", ""),
+                "Lineup": _lineup_display(r),
                 "Status": r.get("status_display", ""),
                 **_modifier_cells(r),
             }
@@ -843,7 +844,7 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
                     "Rank": r.get("ranking", ""),
                     "Band": r.get("ranking_band", ""),
                     "Game": game_with_pitcher(r),
-                    "Lineup": r.get("lineup_status", ""),
+                    "Lineup": _lineup_display(r),
                     "Status": r.get("status_display", ""),
                     **_modifier_cells(r),
                 }
@@ -918,6 +919,13 @@ def _empty_modifier_cells() -> dict:
         "LineupMod": None,
         "StatusMod": None,
     }
+
+
+def _lineup_display(row: dict | None) -> str:
+    try:
+        return lineup_status_with_rotowire(row)
+    except Exception:
+        return str((row or {}).get("lineup_status") or "")
 
 
 def _format_percent_owned(value) -> str:
@@ -1984,7 +1992,7 @@ with tab_fa:
                     "% Ros": _format_percent_owned(r.get("percent_owned")),
                     "Rank": r.get("ranking", ""),
                     "Game": game_with_pitcher(r),
-                    "Lineup": r.get("lineup_status", ""),
+                    "Lineup": _lineup_display(r),
                     "Status": r.get("status_display", ""),
                     **_modifier_cells(r),
                 }

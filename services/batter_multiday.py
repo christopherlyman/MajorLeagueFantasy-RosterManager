@@ -10,6 +10,7 @@ from services.queries import (
     fetch_batter_roster_rows,
     fetch_available_batter_rows,
     apply_start_frequency_penalty,
+    apply_rotowire_expected_out_penalty,
     apply_h2h_matchup_score,
     normalize_name,
     _season_year,
@@ -240,6 +241,7 @@ def _score_future_batter(
 
     score = compute_usual_suspects_batter_ranking(row)
     score = apply_start_frequency_penalty(row, score, ctx["as_of_date"])
+    score = apply_rotowire_expected_out_penalty(row, score, projection_date, ctx["as_of_date"])
     score = apply_h2h_matchup_score(row, score, ctx["league_key"], ctx["team_key"], projection_date)
 
     row.update(score)
