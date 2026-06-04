@@ -1,4 +1,6 @@
 from functools import lru_cache
+from datetime import datetime as _dt_datetime
+from zoneinfo import ZoneInfo as _ZoneInfo
 import json
 import urllib.parse
 import urllib.request
@@ -479,6 +481,86 @@ def eligible_for_slot(row: dict, slot_type: str) -> bool:
 
 def has_game_today(row: dict) -> bool:
     return str(row.get("game_status") or "").strip().upper() == "GAME_FOUND"
+
+
+def _boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "t", "1", "yes", "y"}
+
+
+def _parse_game_time_today_et(as_of_date: str, game_time_et: str):
+    raw = str(game_time_et or "").strip().replace(" ET", "").strip()
+    if not raw:
+        return None
+
+    try:
+        parsed_time = _dt_datetime.strptime(raw, "%I:%M %p").time()
+    except Exception:
+        return None
+
+    try:
+        base_date = _dt_datetime.fromisoformat(str(as_of_date)).date()
+    except Exception:
+        return None
+
+    return _dt_datetime.combine(
+        base_date,
+        parsed_time,
+        tzinfo=_ZoneInfo("America/New_York"),
+    )
+
+
+def _game_has_started_for_slot_lock(row: dict, ctx_obj: dict) -> bool:
+    if _boolish(row.get("game_started")):
+        return True
+
+    game_dt = _parse_game_time_today_et(
+        str(ctx_obj.get("as_of_date") or ""),
+        str(row.get("game_time_et") or ""),
+    )
+    if not game_dt:
+        return False
+
+    return _dt_datetime.now(_ZoneInfo("America/New_York")) >= game_dt
+
+
+def build_auto_locked_assignments_from_started_games(rows: list[dict], ctx_obj: dict) -> dict[str, str]:
+    active_slot_types = {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
+    valid_slot_ids = {slot_id for slot_id, _slot_type in SLOT_ORDER}
+
+    locks: dict[str, str] = {}
+    of_seen = 0
+
+    for row in rows:
+        current_slot = str(row.get("slot_display") or row.get("current_slot") or "").strip().upper()
+        if current_slot not in active_slot_types:
+            continue
+
+        if current_slot == "OF":
+            of_seen += 1
+            slot_id = f"OF{of_seen}"
+        else:
+            slot_id = current_slot
+
+        if slot_id not in valid_slot_ids:
+            continue
+
+        if not _game_has_started_for_slot_lock(row, ctx_obj):
+            continue
+
+        player_key = make_player_key(row)
+        if player_key:
+            locks[slot_id] = player_key
+
+    return locks
+
+
+def _format_auto_locked_assignments(locks: dict[str, str]) -> str:
+    if not locks:
+        return ""
+    parts = [f"{slot}: {player}" for slot, player in locks.items()]
+    return "Locked today: " + "; ".join(parts)
 
 
 def use_h2h_start_every_active_mode() -> bool:
@@ -1600,7 +1682,10 @@ for slot_id, slot_type in SLOT_ORDER:
 
 
 _CURRENT_SLOT_ASSIGNMENT_DIFFS = _current_usual_assignment_slot_diffs(ctx)
-assignment = optimize_lineup(active_rows, manual_choices)
+auto_locked_assignments = build_auto_locked_assignments_from_started_games(rows, ctx)
+today_locked_assignments = dict(manual_choices)
+today_locked_assignments.update(auto_locked_assignments)
+assignment = optimize_lineup(active_rows, today_locked_assignments)
 starting_lineup_rows = build_starting_lineup_table(assignment)
 bench_rows = build_bench_table(rows, assignment)
 combined_roster_rows = starting_lineup_rows + bench_rows
@@ -1851,6 +1936,8 @@ with tab_lineup:
     )
     st.caption(_projection_caption(lineup_projection_view))
     _render_projection_explainer(lineup_projection_view)
+    if lineup_projection_view == "Today" and auto_locked_assignments:
+        st.caption(_format_auto_locked_assignments(auto_locked_assignments))
 
     if lineup_projection_view == "Today":
         display_assignment = assignment
