@@ -995,15 +995,12 @@ def _project_batter_rows(rows: list[dict], lookup: dict[str, dict], projection_v
 
 def _projection_caption(projection_view: str) -> str:
     if projection_view == "Today":
-        return "Today uses live/current ranking inputs."
+        return "Today uses current roster/free-agent rows, game context, and posted lineup status when available."
     return f"{projection_view} is projected. Lineups are not confirmed and Yahoo transactions are not implied."
 
 
 def _render_projection_explainer(projection_view: str) -> None:
     if projection_view == "Today":
-        st.caption(
-            "Today uses the current roster/free-agent rows, current game context, and posted lineup status when available."
-        )
         return
 
     with st.expander("What goes into this projected rank?", expanded=False):

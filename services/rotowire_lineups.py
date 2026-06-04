@@ -1,14 +1,25 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any
+import os
 from urllib.request import Request, urlopen
 import html
 import re
+import unicodedata
+from time import monotonic
+from datetime import datetime, timezone
 
 ROTOWIRE_URL = "https://www.rotowire.com/baseball/daily-lineups.php"
 
 POSTED_FINAL_LINEUP_STATUSES = {"IN_POSTED_LINEUP", "POSTED_BUT_NOT_FOUND"}
+
+ROTOWIRE_CACHE_TTL_SECONDS = int(os.getenv("ROTOWIRE_CACHE_TTL_SECONDS", "5"))
+
+_ROTOWIRE_CACHE: dict[str, Any] = {
+    "fetched_at_monotonic": 0.0,
+    "fetched_at_utc": "",
+    "lineups": None,
+}
 
 TEAM_TO_ABBR = {
     "diamondbacks": "AZ", "d-backs": "AZ",
@@ -64,10 +75,16 @@ def _strip_tags(value: Any) -> str:
 
 
 def _norm_name(value: Any) -> str:
-    value = _clean(value).lower()
-    value = re.sub(r"[^a-z0-9 ]+", "", value)
-    return re.sub(r"\s+", " ", value).strip()
+    value = unicodedata.normalize("NFKD", _clean(value).lower())
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = re.sub(r"[^a-z0-9 ]+", " ", value)
+    tokens = re.sub(r"\s+", " ", value).strip().split()
 
+    suffixes = {"jr", "sr", "ii", "iii", "iv", "v", "vi"}
+    while tokens and tokens[-1] in suffixes:
+        tokens.pop()
+
+    return " ".join(tokens)
 
 def _team_abbr(value: Any) -> str:
     raw = _clean(value)
@@ -178,8 +195,7 @@ def _players(team_html: str) -> list[dict[str, Any]]:
     return out
 
 
-@lru_cache(maxsize=1)
-def fetch_rotowire_lineups() -> dict[str, dict[str, Any]]:
+def _fetch_rotowire_lineups_uncached() -> dict[str, dict[str, Any]]:
     try:
         page = urlopen(
             Request(ROTOWIRE_URL, headers={"User-Agent": "Mozilla/5.0"}),
@@ -206,6 +222,47 @@ def fetch_rotowire_lineups() -> dict[str, dict[str, Any]]:
                 }
 
     return lineups
+
+
+def fetch_rotowire_lineups(force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+    now = monotonic()
+    cached = _ROTOWIRE_CACHE.get("lineups")
+    age = now - float(_ROTOWIRE_CACHE.get("fetched_at_monotonic") or 0.0)
+
+    if (
+        not force_refresh
+        and isinstance(cached, dict)
+        and cached
+        and age <= ROTOWIRE_CACHE_TTL_SECONDS
+    ):
+        return cached
+
+    lineups = _fetch_rotowire_lineups_uncached()
+
+    _ROTOWIRE_CACHE["lineups"] = lineups
+    _ROTOWIRE_CACHE["fetched_at_monotonic"] = now
+    _ROTOWIRE_CACHE["fetched_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    return lineups
+
+
+def rotowire_cache_status() -> dict[str, Any]:
+    cached = _ROTOWIRE_CACHE.get("lineups")
+    age = monotonic() - float(_ROTOWIRE_CACHE.get("fetched_at_monotonic") or 0.0)
+
+    status_counts: dict[str, int] = {}
+    if isinstance(cached, dict):
+        for lineup in cached.values():
+            status = str(lineup.get("status") or "UNKNOWN")
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "ttl_seconds": ROTOWIRE_CACHE_TTL_SECONDS,
+        "age_seconds": round(age, 3),
+        "fetched_at_utc": _ROTOWIRE_CACHE.get("fetched_at_utc") or "",
+        "team_count": len(cached) if isinstance(cached, dict) else 0,
+        "status_counts": status_counts,
+    }
 
 
 def rotowire_lineup_advisory(row: dict[str, Any] | None) -> str:

@@ -5,8 +5,11 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from statistics import mean
+from zoneinfo import ZoneInfo
 
 import streamlit as st
+
+from services.rotowire_lineups import fetch_rotowire_lineups, rotowire_cache_status
 
 
 STATUS_DIR = Path(os.getenv("RMT_STATUS_DIR", "/app/runtime/status"))
@@ -148,6 +151,23 @@ def load_refresh_telemetry():
     return {"last_refresh": last_refresh, "averages": averages}
 
 
+
+def force_rotowire_refresh_for_manual_button() -> dict:
+    try:
+        fetch_rotowire_lineups(force_refresh=True)
+        status = rotowire_cache_status()
+        status["success"] = True
+        return status
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "team_count": 0,
+            "status_counts": {},
+            "fetched_at_utc": "",
+        }
+
+
 def render_refresh_sidebar(ctx: dict[str, str]) -> None:
     st.header("Refresh")
 
@@ -171,6 +191,19 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
             avg_lines.append(f"{REFRESH_LABELS[mode]} avg: {_format_seconds(avg)}")
     if avg_lines:
         st.caption(" | ".join(avg_lines))
+
+    rw_status = st.session_state.get("last_rotowire_refresh_status")
+    if isinstance(rw_status, dict) and rw_status:
+        if rw_status.get("success"):
+            fetched = _parse_utc(rw_status.get("fetched_at_utc"))
+            if fetched:
+                eastern = fetched.astimezone(ZoneInfo("America/New_York"))
+                fetched_text = eastern.strftime("%Y-%m-%d %-I:%M %p %Z")
+            else:
+                fetched_text = str(rw_status.get("fetched_at_utc") or "")
+            st.caption(f"RotoWire last refresh: {fetched_text}")
+        else:
+            st.caption("RotoWire refresh failed.")
 
     lock_path = "/tmp/mlf_refresh_all.lock"
     refresh_running = os.path.exists(lock_path)
@@ -242,6 +275,8 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
             st.session_state["last_refresh_stderr"] = proc.stderr[-8000:]
 
             if proc.returncode == 0:
+                st.session_state["last_rotowire_refresh_status"] = force_rotowire_refresh_for_manual_button()
+
                 try:
                     st.cache_data.clear()
                     st.cache_resource.clear()
