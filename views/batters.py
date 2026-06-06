@@ -1611,8 +1611,11 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
                 for row in current_slots
                 if row["slot"] in {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
             ]
-            single_future = int(round(sum(active_hitter_games) / len(active_hitter_games))) if active_hitter_games else 0
-            future = single_future * 3 if slot == "OF" else single_future
+            future_game_sum = sum(active_hitter_games)
+            future_game_count = len(active_hitter_games)
+            single_future = int((future_game_sum + future_game_count - 1) // future_game_count) if active_hitter_games else 0
+            of_future = int(round((future_game_sum * 3) / future_game_count)) if active_hitter_games else 0
+            future = of_future if slot == "OF" else single_future
             projected = used + future
         else:
             future = max(occupant_future(slot, tomorrow), best_eligible_future(slot, tomorrow))
