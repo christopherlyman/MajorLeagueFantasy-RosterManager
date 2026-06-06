@@ -788,6 +788,34 @@ def _current_usual_assignment_slot_diffs(ctx_obj: dict) -> dict[str, float]:
     }
 
 
+def slot_pace_priority_bonus(slot_type: str) -> float:
+    ctx_obj = globals().get("ctx") or {}
+    if str(ctx_obj.get("league_key") or "").strip() != "469.l.22528":
+        return 0.0
+
+    slot = str(slot_type or "").upper()
+    diff_map = globals().get("_CURRENT_SLOT_ASSIGNMENT_DIFFS") or {}
+
+    try:
+        diff = float(diff_map.get(slot, 0.0) or 0.0)
+    except Exception:
+        diff = 0.0
+
+    if diff < 0:
+        return 1000.0 + (abs(diff) * 100.0)
+    if diff == 0:
+        return 100.0
+    return -10.0 * diff
+
+
+def slot_optimizer_value(slot_id: str, slot_type: str, row: dict) -> float:
+    return (
+        float(row["ranking"])
+        + slot_assignment_bonus(slot_type, row)
+        + slot_pace_priority_bonus(slot_type)
+    )
+
+
 def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None]) -> dict[str, dict | None]:
     players, player_index = build_player_index(rows)
 
@@ -822,6 +850,8 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
         if slot_pos >= len(SLOT_ORDER):
             return 0.0, ()
 
+        slot_id, slot_type = SLOT_ORDER[slot_pos]
+
         if slot_pos in locked_indices:
             idx = locked_indices[slot_pos]
             bit = 1 << idx
@@ -830,7 +860,7 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
             next_score, next_assign = solve(slot_pos + 1, used_mask | bit)
             if next_score == -inf:
                 return -inf, ()
-            total = float(players[idx]["ranking"]) + slot_assignment_bonus(slot_type, players[idx]) + next_score
+            total = slot_optimizer_value(slot_id, slot_type, players[idx]) + next_score
             return total, (idx,) + next_assign
 
         best_score = -inf
@@ -848,7 +878,7 @@ def optimize_lineup(rows: list[dict], locked_assignments: dict[str, str | None])
             next_score, next_assign = solve(slot_pos + 1, used_mask | bit)
             if next_score == -inf:
                 continue
-            total = float(players[idx]["ranking"]) + slot_assignment_bonus(slot_type, players[idx]) + next_score
+            total = slot_optimizer_value(slot_id, slot_type, players[idx]) + next_score
             if total > best_score:
                 best_score = total
                 best_assign = (idx,) + next_assign
