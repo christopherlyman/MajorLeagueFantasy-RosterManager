@@ -1956,8 +1956,247 @@ def save_roster_policy_rows(ctx: dict, edited_rows) -> int:
 
 
 
-tab_lineup, tab_slots, tab_fa, tab_policy = st.tabs(
-    ["Starting Lineup", "Slots", "Batter Free Agents", "Roster Policy"]
+def _recommendation_rank_score(assignment: dict[str, dict | None]) -> float:
+    return sum(float(r.get("ranking") or 0) for r in assignment.values() if r)
+
+
+def _recommendation_objective_score(assignment: dict[str, dict | None]) -> float:
+    total = 0.0
+    for slot_id, slot_type in SLOT_ORDER:
+        row = assignment.get(slot_id)
+        if row:
+            total += float(slot_optimizer_value(slot_id, slot_type, row))
+    return total
+
+
+def build_batter_recommendation_preview(ctx_obj: dict, projection_view: str, min_rank_gain: float = 5.0) -> tuple[list[dict], list[dict], list[dict], dict]:
+    owned_rows = fetch_batter_roster_rows(ctx_obj["league_key"], ctx_obj["team_key"], ctx_obj["as_of_date"])
+    fa_rows = fetch_available_batter_rows(ctx_obj["league_key"], ctx_obj["team_key"], ctx_obj["as_of_date"])
+
+    globals()["ctx"] = ctx_obj
+    globals()["_CURRENT_SLOT_ASSIGNMENT_DIFFS"] = _current_usual_assignment_slot_diffs(ctx_obj)
+    try:
+        globals()["_CURRENT_SLOT_FLOORS"] = _current_slot_floors(ctx_obj)
+    except Exception:
+        pass
+
+    if projection_view == "Today":
+        projected_owned = owned_rows
+        projected_fa = fa_rows
+        auto_locks = build_auto_locked_assignments_from_started_games(owned_rows, ctx_obj)
+        locks = dict(manual_choices)
+        locks.update(auto_locks)
+    else:
+        projection = build_batter_multiday_projection(ctx_obj, days=3, include_fa=True)
+        owned_lookup = _projection_lookup(projection, "OWNED")
+        fa_lookup = _projection_lookup(projection, "FA")
+        projected_owned = _project_batter_rows(owned_rows, owned_lookup, projection_view)
+        projected_fa = _project_batter_rows(fa_rows, fa_lookup, projection_view)
+        locks = {}
+
+    active_owned = [r for r in projected_owned if not is_unavailable(r)]
+
+    def player_key(row: dict) -> str:
+        return make_player_key(row)
+
+    def boolish(v) -> bool:
+        return str(v or "").strip().lower() in {"true", "t", "1", "yes", "y"}
+
+    baseline_assignment = optimize_lineup(active_owned, locks)
+    baseline_rank_score = _recommendation_rank_score(baseline_assignment)
+    baseline_objective_score = _recommendation_objective_score(baseline_assignment)
+    baseline_names = {player_key(r) for r in baseline_assignment.values() if r}
+    locked_players = set(locks.values())
+
+    baseline_rows: list[dict] = []
+    for slot_id, slot_type in SLOT_ORDER:
+        r = baseline_assignment.get(slot_id)
+        baseline_rows.append(
+            {
+                "Slot": slot_id,
+                "Player": player_key(r) if r else "EMPTY",
+                "Rank": int(float(r.get("ranking") or 0)) if r else "",
+                "Policy": r.get("policy_status", "") if r else "",
+                "Game": r.get("game_display", "") if r else "",
+                "Lineup": lineup_status_with_rotowire(r) if r else "",
+            }
+        )
+
+    drop_candidates = []
+    for r in active_owned:
+        name = player_key(r)
+        policy = str(r.get("policy_status") or "").upper()
+        slot = str(r.get("slot_display") or "").upper()
+
+        if policy != "DROPPABLE_LOW":
+            continue
+        if slot in {"IL", "NA"}:
+            continue
+        if projection_view == "Today" and name in locked_players:
+            continue
+        if projection_view == "Today" and boolish(r.get("game_started")):
+            continue
+
+        roster_without = [x for x in active_owned if player_key(x) != name]
+        assignment_without = optimize_lineup(roster_without, locks)
+
+        rank_drop_cost = baseline_rank_score - _recommendation_rank_score(assignment_without)
+        objective_drop_cost = baseline_objective_score - _recommendation_objective_score(assignment_without)
+
+        drop_candidates.append(
+            {
+                "row": r,
+                "name": name,
+                "rank": float(r.get("ranking") or 0),
+                "slot": slot,
+                "in_baseline": name in baseline_names,
+                "rank_drop_cost": rank_drop_cost,
+                "objective_drop_cost": objective_drop_cost,
+            }
+        )
+
+    fa_candidates = []
+    for r in projected_fa:
+        if is_unavailable(r):
+            continue
+        if not has_game_today(r):
+            continue
+        if projection_view == "Today" and boolish(r.get("game_started")):
+            continue
+        if float(r.get("ranking") or 0) <= 0:
+            continue
+        fa_candidates.append(r)
+
+    raw_recs = []
+    for drop in drop_candidates:
+        roster_without = [r for r in active_owned if player_key(r) != drop["name"]]
+
+        for add in fa_candidates:
+            add_name = player_key(add)
+            test_roster = roster_without + [add]
+            assignment = optimize_lineup(test_roster, locks)
+
+            new_rank_score = _recommendation_rank_score(assignment)
+            new_objective_score = _recommendation_objective_score(assignment)
+
+            rank_gain = new_rank_score - baseline_rank_score
+            objective_gain = new_objective_score - baseline_objective_score
+
+            if rank_gain < min_rank_gain:
+                continue
+
+            added_slot = ""
+            for slot, row in assignment.items():
+                if row and player_key(row) == add_name:
+                    added_slot = slot
+                    break
+
+            if not added_slot:
+                continue
+
+            new_names = {player_key(r) for r in assignment.values() if r}
+            displaced = sorted(baseline_names - new_names)
+
+            raw_recs.append(
+                {
+                    "rank_gain": rank_gain,
+                    "objective_gain": objective_gain,
+                    "slot": added_slot,
+                    "drop": drop,
+                    "add": add,
+                    "add_name": add_name,
+                    "add_rank": float(add.get("ranking") or 0),
+                    "new_rank_score": new_rank_score,
+                    "displaced": ", ".join(displaced),
+                }
+            )
+
+    best_by_add = {}
+    for rec in raw_recs:
+        key = rec["add_name"]
+        current = best_by_add.get(key)
+
+        rec_sort = (
+            rec["rank_gain"],
+            rec["objective_gain"],
+            -rec["drop"]["rank_drop_cost"],
+            -rec["drop"]["rank"],
+            rec["add_rank"],
+        )
+        cur_sort = None
+        if current:
+            cur_sort = (
+                current["rank_gain"],
+                current["objective_gain"],
+                -current["drop"]["rank_drop_cost"],
+                -current["drop"]["rank"],
+                current["add_rank"],
+            )
+
+        if current is None or rec_sort > cur_sort:
+            best_by_add[key] = rec
+
+    deduped = sorted(
+        best_by_add.values(),
+        key=lambda r: (-r["rank_gain"], -r["objective_gain"], r["drop"]["rank_drop_cost"], -r["add_rank"], r["add_name"]),
+    )
+
+    recommendation_rows = []
+    for rec in deduped[:20]:
+        drop = rec["drop"]
+        add = rec["add"]
+        drop_note = "bench / zero-cost drop" if drop["rank_drop_cost"] == 0 else f"starter drop cost {round(drop['rank_drop_cost'], 1)}"
+
+        recommendation_rows.append(
+            {
+                "Rank Gain": round(rec["rank_gain"], 1),
+                "Objective Gain": round(rec["objective_gain"], 3),
+                "Add": rec["add_name"],
+                "Add Rank": int(float(add.get("ranking") or 0)),
+                "Start Slot": rec["slot"],
+                "Drop": drop["name"],
+                "Drop Rank": int(float(drop["rank"] or 0)),
+                "Drop Cost": round(drop["rank_drop_cost"], 1),
+                "Displaced": rec["displaced"],
+                "Add Game": add.get("game_display", ""),
+                "Add Lineup": lineup_status_with_rotowire(add),
+                "Reason": f"+{round(rec['rank_gain'], 1)} rank; {drop_note}",
+            }
+        )
+
+    drop_rows = []
+    for drop in sorted(drop_candidates, key=lambda x: (x["rank_drop_cost"], x["rank"], x["name"])):
+        r = drop["row"]
+        drop_rows.append(
+            {
+                "Player": drop["name"],
+                "Policy": r.get("policy_status", ""),
+                "Slot": drop["slot"],
+                "Rank": int(float(drop["rank"] or 0)),
+                "In Baseline": drop["in_baseline"],
+                "Drop Cost": round(drop["rank_drop_cost"], 1),
+                "Game": r.get("game_display", ""),
+                "Lineup": lineup_status_with_rotowire(r),
+            }
+        )
+
+    summary = {
+        "projection_view": projection_view,
+        "baseline_rank_score": baseline_rank_score,
+        "baseline_objective_score": baseline_objective_score,
+        "drop_candidate_count": len(drop_candidates),
+        "fa_candidate_count": len(fa_candidates),
+        "raw_recommendation_count": len(raw_recs),
+        "deduped_recommendation_count": len(deduped),
+    }
+
+    return recommendation_rows, baseline_rows, drop_rows, summary
+
+
+
+
+tab_lineup, tab_recommendations, tab_slots, tab_fa, tab_policy = st.tabs(
+    ["Starting Lineup", "Recommendations", "Slots", "Batter Free Agents", "Roster Policy"]
 )
 
 with tab_lineup:
@@ -2001,6 +2240,69 @@ with tab_lineup:
         column_config=BATTER_LINEUP_COLUMN_CONFIG,
         key=f"combined_roster_{ctx['as_of_date']}_{lineup_projection_view}_{len(display_combined_roster_rows)}",
     )
+
+with tab_recommendations:
+    st.subheader("Batter Recommendations")
+    st.caption("Read-only planning. No Yahoo moves are made from this screen.")
+
+    recommendation_view = st.radio(
+        "Recommendation View",
+        options=["Today", "Tomorrow"],
+        horizontal=True,
+        key=f"recommendation_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+    )
+
+    min_rank_gain = st.number_input(
+        "Minimum rank gain",
+        min_value=1.0,
+        max_value=25.0,
+        value=5.0,
+        step=1.0,
+        key=f"recommendation_min_gain_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+    )
+
+    rec_rows, rec_baseline_rows, rec_drop_rows, rec_summary = build_batter_recommendation_preview(
+        ctx,
+        recommendation_view,
+        float(min_rank_gain),
+    )
+
+    st.caption(
+        " | ".join(
+            [
+                f"View: {rec_summary['projection_view']}",
+                f"Baseline score: {int(rec_summary['baseline_rank_score'])}",
+                f"Drop candidates: {rec_summary['drop_candidate_count']}",
+                f"FA candidates: {rec_summary['fa_candidate_count']}",
+                f"Recommendations: {rec_summary['deduped_recommendation_count']}",
+            ]
+        )
+    )
+
+    if rec_rows:
+        st.dataframe(
+            pd.DataFrame(rec_rows),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No add/drop recommendations meet the current threshold.")
+
+    with st.expander("Baseline lineup used for recommendation scoring", expanded=False):
+        st.dataframe(
+            pd.DataFrame(rec_baseline_rows),
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Eligible drop candidates", expanded=False):
+        st.dataframe(
+            pd.DataFrame(rec_drop_rows),
+            width="stretch",
+            hide_index=True,
+        )
+
+
 
 with tab_slots:
     st.subheader("Slot controls")
