@@ -1644,7 +1644,7 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
             future_game_sum = sum(active_hitter_games)
             future_game_count = len(active_hitter_games)
             single_future = int((future_game_sum + future_game_count - 1) // future_game_count) if active_hitter_games else 0
-            of_future = int(round((future_game_sum * 3) / future_game_count)) if active_hitter_games else 0
+            of_future = int(((future_game_sum * 3) + future_game_count - 1) // future_game_count) if active_hitter_games else 0
             future = of_future if slot == "OF" else single_future
             projected = used + future
         else:
