@@ -2195,6 +2195,524 @@ def build_batter_recommendation_preview(ctx_obj: dict, projection_view: str, min
 
 
 
+
+DAILY_ACTION_LOW_MIN_GAIN = 5.0
+DAILY_ACTION_HIGH_MIN_GAIN = 8.0
+DAILY_ACTION_BACKUP_MIN_GAIN = 1.0
+DAILY_ACTION_TOMORROW_CARRY_RANK = 60.0
+DAILY_ACTION_MARGINAL_SLOT_GAP = 3.0
+DAILY_ACTION_SEVERE_HAND_CUTOFF = -2.0
+DAILY_ACTION_BACKUP_HAND_FLOOR = -2.0
+DAILY_ACTION_HAND_ALT_RANK_WINDOW = 5.0
+DAILY_ACTION_SCAN_OFFSETS_MINUTES = (120, 90, 60, 30, 20, 10)
+DAILY_ACTION_BUFFER_MINUTES = 10
+
+def _daily_action_rank_score(assignment: dict[str, dict | None]) -> float:
+    return sum(float(r.get("ranking") or 0) for r in assignment.values() if r)
+
+
+def _daily_action_player_key(row: dict | None) -> str:
+    return make_player_key(row) if row else ""
+
+
+def _daily_action_hand(row: dict | None) -> float:
+    if not row:
+        return 0.0
+    try:
+        return float(row.get("handedness_points") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _daily_action_start_rate(row: dict | None) -> str:
+    if not row:
+        return ""
+    try:
+        rate = row.get("start_frequency_rate")
+        if rate in ("", None):
+            return ""
+        return f"{float(rate) * 100:.0f}%"
+    except Exception:
+        return ""
+
+
+def _daily_action_boolish(v) -> bool:
+    return str(v or "").strip().lower() in {"true", "t", "1", "yes", "y"}
+
+
+def _daily_action_parse_game_time(ctx_obj: dict, row: dict | None):
+    if not row:
+        return None
+
+    import re
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    game = str(row.get("game_display") or "")
+    m = re.search(r"—\s*(\d{1,2}):(\d{2})\s*(AM|PM)\s*ET", game, re.I)
+    if not m:
+        return None
+
+    hour = int(m.group(1))
+    minute = int(m.group(2))
+    ampm = m.group(3).upper()
+
+    if ampm == "PM" and hour != 12:
+        hour += 12
+    if ampm == "AM" and hour == 12:
+        hour = 0
+
+    d = datetime.fromisoformat(str(ctx_obj["as_of_date"]))
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=ZoneInfo("America/New_York"))
+
+
+def _daily_action_fmt_time(dt) -> str:
+    if not dt:
+        return ""
+    return dt.strftime("%-I:%M %p ET")
+
+
+def _daily_action_rw_status(row: dict | None) -> str:
+    if not row:
+        return ""
+    return lineup_status_with_rotowire(row)
+
+
+def _daily_action_rw_bucket(row: dict | None) -> str:
+    s = _daily_action_rw_status(row)
+    if "IN_POSTED_LINEUP" in s or "RW Posted In" in s:
+        return "POSTED_IN"
+    if "RW Expected In" in s:
+        return "EXPECTED_IN"
+    if "POSTED_BUT_NOT_FOUND" in s or "RW Expected Out" in s or "RW Posted Out" in s:
+        return "OUT"
+    if "LINEUP_NOT_CONFIRMED" in s:
+        return "UNKNOWN"
+    if "PROJECTED" in s:
+        return "PROJECTED"
+    return "UNKNOWN"
+
+
+def _daily_action_status_score(row: dict | None) -> int:
+    return {
+        "POSTED_IN": 4,
+        "EXPECTED_IN": 3,
+        "PROJECTED": 2,
+        "UNKNOWN": 1,
+        "OUT": 0,
+    }.get(_daily_action_rw_bucket(row), 0)
+
+
+def _daily_action_next_scan_time(ctx_obj: dict, row: dict | None):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    game_start = _daily_action_parse_game_time(ctx_obj, row)
+    if not game_start:
+        return None
+
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    scans = [
+        game_start - timedelta(minutes=minutes)
+        for minutes in DAILY_ACTION_SCAN_OFFSETS_MINUTES
+    ]
+
+    for scan in scans:
+        if scan >= now_et:
+            return scan
+
+    if now_et < game_start:
+        return now_et
+
+    return None
+
+
+def _daily_action_backup_time_valid(ctx_obj: dict, primary_row: dict | None, backup_row: dict | None) -> bool:
+    from datetime import timedelta
+
+    primary_start = _daily_action_parse_game_time(ctx_obj, primary_row)
+    backup_start = _daily_action_parse_game_time(ctx_obj, backup_row)
+    if not primary_start or not backup_start:
+        return False
+
+    scan = _daily_action_next_scan_time(ctx_obj, primary_row)
+    if not scan:
+        return False
+
+    return backup_start >= scan + timedelta(minutes=DAILY_ACTION_BUFFER_MINUTES)
+
+
+def _daily_action_slot_type(slot_id: str) -> str:
+    for s_id, s_type in SLOT_ORDER:
+        if s_id == slot_id:
+            return s_type
+    return slot_id
+
+
+def _daily_action_threshold_gap(slot_id: str, row: dict | None) -> float | None:
+    if not row or not slot_id:
+        return None
+
+    slot_type = _daily_action_slot_type(slot_id)
+    try:
+        threshold = float(slot_min_ranking(slot_id, slot_type) or 0.0)
+    except Exception:
+        threshold = 0.0
+
+    if threshold <= 0:
+        return None
+
+    try:
+        return float(row.get("ranking") or 0.0) - threshold
+    except Exception:
+        return None
+
+
+def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, list[dict], list[dict], dict]:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    LOW_MIN_GAIN = DAILY_ACTION_LOW_MIN_GAIN
+    HIGH_MIN_GAIN = DAILY_ACTION_HIGH_MIN_GAIN
+    BACKUP_MIN_GAIN = DAILY_ACTION_BACKUP_MIN_GAIN
+
+    owned_rows = fetch_batter_roster_rows(ctx_obj["league_key"], ctx_obj["team_key"], ctx_obj["as_of_date"])
+    fa_rows = fetch_available_batter_rows(ctx_obj["league_key"], ctx_obj["team_key"], ctx_obj["as_of_date"])
+
+    globals()["ctx"] = ctx_obj
+    globals()["_CURRENT_SLOT_ASSIGNMENT_DIFFS"] = _current_usual_assignment_slot_diffs(ctx_obj)
+    try:
+        globals()["_CURRENT_SLOT_FLOORS"] = _current_slot_floors(ctx_obj)
+    except Exception:
+        pass
+
+    active_owned = [r for r in owned_rows if not is_unavailable(r)]
+    auto_locks = build_auto_locked_assignments_from_started_games(owned_rows, ctx_obj)
+    locks = dict(manual_choices)
+    locks.update(auto_locks)
+    locked_players = set(locks.values())
+
+    baseline_assignment = optimize_lineup(active_owned, locks)
+    baseline_score = _daily_action_rank_score(baseline_assignment)
+    baseline_names = {_daily_action_player_key(r) for r in baseline_assignment.values() if r}
+
+    projection = build_batter_multiday_projection(ctx_obj, days=3, include_fa=True)
+    owned_lookup = _projection_lookup(projection, "OWNED")
+    fa_lookup = _projection_lookup(projection, "FA")
+
+    tomorrow_owned = _project_batter_rows(owned_rows, owned_lookup, "Tomorrow")
+    tomorrow_fa = _project_batter_rows(fa_rows, fa_lookup, "Tomorrow")
+
+    tomorrow_owned_rank = {
+        _daily_action_player_key(r): float(r.get("ranking") or 0.0)
+        for r in tomorrow_owned
+    }
+
+    top_tomorrow_fa = None
+    top_tomorrow_fa_rank = 0.0
+    for r in tomorrow_fa:
+        if is_unavailable(r):
+            continue
+        try:
+            r_rank = float(r.get("ranking") or 0.0)
+        except Exception:
+            r_rank = 0.0
+        if r_rank > top_tomorrow_fa_rank:
+            top_tomorrow_fa = r
+            top_tomorrow_fa_rank = r_rank
+
+    baseline_rows: list[dict] = []
+    for slot_id, slot_type in SLOT_ORDER:
+        r = baseline_assignment.get(slot_id)
+        baseline_rows.append(
+            {
+                "Slot": slot_id,
+                "Player": _daily_action_player_key(r) if r else "EMPTY",
+                "Rank": int(float(r.get("ranking") or 0)) if r else "",
+                "Eligible": r.get("eligible_display", "") if r else "",
+                "Lineup": _daily_action_rw_status(r) if r else "",
+                "Game": r.get("game_display", "") if r else "",
+            }
+        )
+
+    drop_candidates = []
+    for r in active_owned:
+        name = _daily_action_player_key(r)
+        policy = str(r.get("policy_status") or "").upper()
+        slot = str(r.get("slot_display") or "").upper()
+
+        if policy not in {"DROPPABLE_LOW", "DROPPABLE_HIGH"}:
+            continue
+        if slot in {"IL", "NA"}:
+            continue
+        if name in locked_players:
+            continue
+        if _daily_action_boolish(r.get("game_started")):
+            continue
+
+        min_gain = HIGH_MIN_GAIN if policy == "DROPPABLE_HIGH" else LOW_MIN_GAIN
+        roster_without = [x for x in active_owned if _daily_action_player_key(x) != name]
+        without_assignment = optimize_lineup(roster_without, locks)
+        drop_cost = baseline_score - _daily_action_rank_score(without_assignment)
+
+        drop_candidates.append(
+            {
+                "row": r,
+                "name": name,
+                "policy": policy,
+                "rank": float(r.get("ranking") or 0),
+                "slot": slot,
+                "min_gain": min_gain,
+                "drop_cost": drop_cost,
+                "tomorrow_rank": tomorrow_owned_rank.get(name, 0.0),
+            }
+        )
+
+    fa_candidates = []
+    for r in fa_rows:
+        if is_unavailable(r):
+            continue
+        if not has_game_today(r):
+            continue
+        if _daily_action_boolish(r.get("game_started")):
+            continue
+        if float(r.get("ranking") or 0) <= 0:
+            continue
+        fa_candidates.append(r)
+
+    def choose_primary(candidates: list[dict]) -> dict | None:
+        viable = [c for c in candidates if c["rank_gain"] >= c["min_gain"] and _daily_action_rw_bucket(c["add"]) != "OUT"]
+        if not viable:
+            return None
+
+        viable = sorted(
+            viable,
+            key=lambda c: (
+                c["rank_gain"],
+                _daily_action_status_score(c["add"]),
+                c["add_rank"],
+                _daily_action_hand(c["add"]),
+                c["add_name"],
+            ),
+            reverse=True,
+        )
+
+        top = viable[0]
+        top_hand = _daily_action_hand(top["add"])
+
+        if top_hand <= DAILY_ACTION_SEVERE_HAND_CUTOFF:
+            better_hand = [
+                c for c in viable
+                if c["add_rank"] >= top["add_rank"] - DAILY_ACTION_HAND_ALT_RANK_WINDOW
+                and _daily_action_hand(c["add"]) > top_hand
+                and _daily_action_status_score(c["add"]) >= _daily_action_status_score(top["add"]) - 1
+            ]
+            if better_hand:
+                return sorted(
+                    better_hand,
+                    key=lambda c: (
+                        _daily_action_status_score(c["add"]),
+                        c["rank_gain"],
+                        c["add_rank"],
+                        _daily_action_hand(c["add"]),
+                        c["add_name"],
+                    ),
+                    reverse=True,
+                )[0]
+
+        return top
+
+    def choose_backup(primary: dict | None, candidates: list[dict]) -> dict | None:
+        if not primary:
+            return None
+
+        pool = [
+            c for c in candidates
+            if c["add_name"] != primary["add_name"]
+            and c["rank_gain"] >= BACKUP_MIN_GAIN
+            and _daily_action_rw_bucket(c["add"]) != "OUT"
+        ]
+
+        if not pool:
+            return None
+
+        safer_pool = [
+            c for c in pool
+            if _daily_action_hand(c["add"]) > DAILY_ACTION_BACKUP_HAND_FLOOR
+        ] or pool
+
+        return sorted(
+            safer_pool,
+            key=lambda c: (
+                _daily_action_backup_time_valid(ctx_obj, primary["add"], c["add"]),
+                _daily_action_status_score(c["add"]),
+                c["rank_gain"],
+                c["add_rank"],
+                _daily_action_hand(c["add"]),
+                c["add_name"],
+            ),
+            reverse=True,
+        )[0]
+
+    action_rows = []
+
+    for drop in sorted(drop_candidates, key=lambda d: (d["policy"], d["drop_cost"], d["name"])):
+        roster_without = [r for r in active_owned if _daily_action_player_key(r) != drop["name"]]
+        candidates = []
+
+        for add in fa_candidates:
+            add_name = _daily_action_player_key(add)
+            test_roster = roster_without + [add]
+            assignment = optimize_lineup(test_roster, locks)
+            new_score = _daily_action_rank_score(assignment)
+            rank_gain = new_score - baseline_score
+
+            add_slot = ""
+            for slot, row in assignment.items():
+                if row and _daily_action_player_key(row) == add_name:
+                    add_slot = slot
+                    break
+
+            if not add_slot:
+                continue
+
+            new_names = {_daily_action_player_key(r) for r in assignment.values() if r}
+            displaced = sorted(baseline_names - new_names)
+
+            candidates.append(
+                {
+                    "add": add,
+                    "add_name": add_name,
+                    "add_rank": float(add.get("ranking") or 0),
+                    "slot": add_slot,
+                    "rank_gain": rank_gain,
+                    "min_gain": drop["min_gain"],
+                    "displaced": ", ".join(displaced),
+                    "threshold_gap": _daily_action_threshold_gap(add_slot, add),
+                }
+            )
+
+        primary = choose_primary(candidates)
+        backup = choose_backup(primary, candidates) if primary else None
+
+        decision = "HOLD"
+        reason_parts: list[str] = []
+
+        if not primary:
+            decision = "HOLD"
+            reason_parts.append(f"No add beats hold by required gain ({drop['min_gain']:.0f}).")
+        else:
+            primary_bucket = _daily_action_rw_bucket(primary["add"])
+            backup_valid = _daily_action_backup_time_valid(ctx_obj, primary["add"], backup["add"]) if backup else False
+            threshold_gap = primary.get("threshold_gap")
+            carry_risk = drop["tomorrow_rank"] >= DAILY_ACTION_TOMORROW_CARRY_RANK
+            marginal_today = threshold_gap is not None and threshold_gap <= DAILY_ACTION_MARGINAL_SLOT_GAP
+
+            primary_hand = _daily_action_hand(primary["add"])
+            carry_veto = carry_risk and (
+                marginal_today
+                or primary_hand <= DAILY_ACTION_SEVERE_HAND_CUTOFF
+            )
+
+            if carry_veto:
+                decision = "HOLD SLOT"
+                reason_parts.append("Preserve streaming slot: drop has tomorrow carry value and primary is marginal or high-risk.")
+            elif primary_bucket == "POSTED_IN":
+                decision = "DO NOW"
+                reason_parts.append("Primary is posted and improves today.")
+            elif primary_bucket in {"EXPECTED_IN", "PROJECTED", "UNKNOWN"}:
+                if backup and backup_valid:
+                    decision = "WAIT"
+                    reason_parts.append("Primary uncertain; backup remains time-valid.")
+                elif backup and _daily_action_rw_bucket(backup["add"]) == "POSTED_IN" and backup["rank_gain"] >= drop["min_gain"]:
+                    decision = "TAKE BACKUP NOW"
+                    reason_parts.append("Primary uncertain; backup is posted but may not remain time-valid.")
+                else:
+                    decision = "WAIT"
+                    reason_parts.append("Primary uncertain; act only if lineup confirms.")
+            else:
+                decision = "HOLD"
+                reason_parts.append("Primary is not expected or posted in lineup.")
+
+            p_hand = _daily_action_hand(primary["add"])
+            if p_hand <= -3:
+                reason_parts.append(f"Severe hand caution: {p_hand:.1f}.")
+            elif p_hand <= -2:
+                reason_parts.append(f"Strong hand caution: {p_hand:.1f}.")
+            elif p_hand <= -1:
+                reason_parts.append(f"Hand caution: {p_hand:.1f}.")
+
+            if carry_risk:
+                reason_parts.append(f"Drop has tomorrow carry value ({drop['tomorrow_rank']:.0f}).")
+
+        p_add = primary["add"] if primary else None
+        b_add = backup["add"] if backup else None
+        p_game = _daily_action_parse_game_time(ctx_obj, p_add)
+        b_game = _daily_action_parse_game_time(ctx_obj, b_add)
+        p_scan = _daily_action_next_scan_time(ctx_obj, p_add) if p_add else None
+        b_valid = _daily_action_backup_time_valid(ctx_obj, p_add, b_add) if p_add and b_add else False
+
+        action_rows.append(
+            {
+                "Decision": decision,
+                "Drop": drop["name"],
+                "Policy": drop["policy"],
+                "Drop Rank": int(drop["rank"]),
+                "Drop Cost": round(drop["drop_cost"], 1),
+                "Drop Tomorrow": int(drop["tomorrow_rank"]) if drop["tomorrow_rank"] else "",
+                "Primary Add": primary["add_name"] if primary else "",
+                "Primary Slot": primary["slot"] if primary else "",
+                "Primary Rank": int(primary["add_rank"]) if primary else "",
+                "Primary Gain": round(primary["rank_gain"], 1) if primary else "",
+                "Primary Gap": round(primary["threshold_gap"], 1) if primary and primary.get("threshold_gap") is not None else "",
+                "Primary Hand": round(_daily_action_hand(p_add), 1) if p_add else "",
+                "Primary Start%": _daily_action_start_rate(p_add),
+                "Primary RW": _daily_action_rw_bucket(p_add),
+                "Primary Game": _daily_action_fmt_time(p_game),
+                "Next Scan": _daily_action_fmt_time(p_scan),
+                "Backup Add": backup["add_name"] if backup else "",
+                "Backup Rank": int(backup["add_rank"]) if backup else "",
+                "Backup Gain": round(backup["rank_gain"], 1) if backup else "",
+                "Backup Hand": round(_daily_action_hand(b_add), 1) if b_add else "",
+                "Backup Start%": _daily_action_start_rate(b_add),
+                "Backup RW": _daily_action_rw_bucket(b_add),
+                "Backup Game": _daily_action_fmt_time(b_game),
+                "Backup Valid": b_valid,
+                "Displaced": primary["displaced"] if primary else "",
+                "Reason": " ".join(reason_parts),
+            }
+        )
+
+    decision_priority = {"DO NOW": 5, "TAKE BACKUP NOW": 4, "WAIT": 3, "HOLD SLOT": 2, "HOLD": 1}
+    actionable = [r for r in action_rows if r["Decision"] not in {"HOLD"}]
+
+    top_action = None
+    if actionable:
+        top_action = sorted(
+            actionable,
+            key=lambda r: (
+                decision_priority.get(str(r["Decision"]), 0),
+                float(r["Primary Gain"] or 0),
+                float(r["Backup Gain"] or 0),
+            ),
+            reverse=True,
+        )[0]
+
+    summary = {
+        "now_et": datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %-I:%M %p ET"),
+        "baseline_score": baseline_score,
+        "drop_candidate_count": len(drop_candidates),
+        "fa_candidate_count": len(fa_candidates),
+        "top_tomorrow_fa": _daily_action_player_key(top_tomorrow_fa) if top_tomorrow_fa else "",
+        "top_tomorrow_fa_rank": top_tomorrow_fa_rank,
+        "locked_count": len(locks),
+    }
+
+    return top_action, action_rows, baseline_rows, summary
+
+
+
+
 tab_lineup, tab_recommendations, tab_slots, tab_fa, tab_policy = st.tabs(
     ["Starting Lineup", "Recommendations", "Slots", "Batter Free Agents", "Roster Policy"]
 )
@@ -2242,65 +2760,88 @@ with tab_lineup:
     )
 
 with tab_recommendations:
-    st.subheader("Batter Recommendations")
-    st.caption("Read-only planning. No Yahoo moves are made from this screen.")
-
-    recommendation_view = st.radio(
-        "Recommendation View",
-        options=["Today", "Tomorrow"],
-        horizontal=True,
-        key=f"recommendation_view_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+    st.subheader("Daily Action Plan")
+    st.caption(
+        "Read-only daily planner. Uses current roster, available FAs, RotoWire lineup status, slot fit, handedness, backup timing, and tomorrow carry value."
     )
 
-    min_rank_gain = st.number_input(
-        "Minimum rank gain",
-        min_value=1.0,
-        max_value=25.0,
-        value=5.0,
-        step=1.0,
-        key=f"recommendation_min_gain_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
-    )
-
-    rec_rows, rec_baseline_rows, rec_drop_rows, rec_summary = build_batter_recommendation_preview(
-        ctx,
-        recommendation_view,
-        float(min_rank_gain),
-    )
+    top_action, action_rows, action_baseline_rows, action_summary = build_batter_daily_action_plan_preview(ctx)
 
     st.caption(
         " | ".join(
             [
-                f"View: {rec_summary['projection_view']}",
-                f"Baseline score: {int(rec_summary['baseline_rank_score'])}",
-                f"Drop candidates: {rec_summary['drop_candidate_count']}",
-                f"FA candidates: {rec_summary['fa_candidate_count']}",
-                f"Recommendations: {rec_summary['deduped_recommendation_count']}",
+                f"Now: {action_summary['now_et']}",
+                f"Baseline score: {int(action_summary['baseline_score'])}",
+                f"Drop candidates: {action_summary['drop_candidate_count']}",
+                f"FA candidates: {action_summary['fa_candidate_count']}",
+                f"Locked slots: {action_summary['locked_count']}",
+                f"Top tomorrow FA: {action_summary['top_tomorrow_fa']} ({int(action_summary['top_tomorrow_fa_rank']) if action_summary['top_tomorrow_fa_rank'] else ''})",
             ]
         )
     )
 
-    if rec_rows:
+    if top_action:
+        top_decision = str(top_action["Decision"])
+        if top_decision == "DO NOW":
+            top_text = (
+                f"Top action: DO NOW — Drop {top_action['Drop']} for {top_action['Primary Add']} "
+                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
+                f"{top_action['Reason']}"
+            )
+        elif top_decision == "TAKE BACKUP NOW":
+            top_text = (
+                f"Top action: TAKE BACKUP NOW — Drop {top_action['Drop']} for {top_action['Backup Add']} "
+                f"(backup gain {top_action['Backup Gain']}, game {top_action['Backup Game']}). "
+                f"{top_action['Reason']}"
+            )
+        elif top_decision == "WAIT":
+            top_text = (
+                f"Top action: WAIT — Watch {top_action['Primary Add']} for possible {top_action['Drop']} replacement "
+                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}, next scan {top_action['Next Scan']}). "
+                f"{top_action['Reason']}"
+            )
+        elif top_decision == "HOLD SLOT":
+            top_text = (
+                f"Top action: HOLD SLOT — Keep {top_action['Drop']} / preserve streaming slot. "
+                f"Candidate was {top_action['Primary Add']} "
+                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
+                f"{top_action['Reason']}"
+            )
+        else:
+            top_text = f"Top action: {top_decision} — {top_action['Reason']}"
+        st.info(top_text)
+    else:
+        st.info("Top action: HOLD — no actionable daily move beats the current roster under the current rules.")
+
+    if action_rows:
         st.dataframe(
-            pd.DataFrame(rec_rows),
+            pd.DataFrame(action_rows),
             width="stretch",
             hide_index=True,
         )
     else:
-        st.info("No add/drop recommendations meet the current threshold.")
+        st.info("No replaceable players are currently eligible for a daily action plan.")
 
-    with st.expander("Baseline lineup used for recommendation scoring", expanded=False):
+    with st.expander("Baseline lineup used for daily action scoring", expanded=False):
         st.dataframe(
-            pd.DataFrame(rec_baseline_rows),
+            pd.DataFrame(action_baseline_rows),
             width="stretch",
             hide_index=True,
         )
 
-    with st.expander("Eligible drop candidates", expanded=False):
-        st.dataframe(
-            pd.DataFrame(rec_drop_rows),
-            width="stretch",
-            hide_index=True,
+    with st.expander("Legacy rank-gain recommendation preview", expanded=False):
+        rec_rows, rec_baseline_rows, rec_drop_rows, rec_summary = build_batter_recommendation_preview(
+            ctx,
+            "Today",
+            5.0,
         )
+        st.caption(
+            "This older preview is kept temporarily for comparison while the Daily Action Plan is tuned."
+        )
+        if rec_rows:
+            st.dataframe(pd.DataFrame(rec_rows), width="stretch", hide_index=True)
+        else:
+            st.info("Legacy preview: no recommendations meet threshold.")
 
 
 
