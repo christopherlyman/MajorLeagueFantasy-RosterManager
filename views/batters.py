@@ -1141,6 +1141,25 @@ Future views are planning projections. Lineups are not confirmed, probable pitch
         )
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_batter_roster_rows(league_key: str, team_key: str, as_of_date: str) -> list[dict]:
+    return fetch_batter_roster_rows(
+        league_key=league_key,
+        team_key=team_key,
+        as_of_date=as_of_date,
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_available_batter_rows(league_key: str, team_key: str, as_of_date: str) -> list[dict]:
+    return fetch_available_batter_rows(
+        league_key=league_key,
+        team_key=team_key,
+        as_of_date=as_of_date,
+    )
+
+
+
 ctx = get_runtime_context()
 
 try:
@@ -1155,7 +1174,7 @@ if not (ctx.get("league_key") and ctx.get("team_key") and ctx.get("as_of_date"))
     st.error("Missing DEFAULT_LEAGUE_KEY / DEFAULT_TEAM_KEY in .env")
     st.stop()
 
-rows = fetch_batter_roster_rows(
+rows = _cached_batter_roster_rows(
     league_key=ctx["league_key"],
     team_key=ctx["team_key"],
     as_of_date=ctx["as_of_date"],
@@ -1169,7 +1188,7 @@ slot_floor_meta = compute_schedule_pressure_meta(
 _CURRENT_SLOT_FLOORS = slot_floor_meta["floors"]
 _CURRENT_SLOT_FLOOR_META = slot_floor_meta
 
-available_batters = fetch_available_batter_rows(
+available_batters = _cached_available_batter_rows(
     league_key=ctx["league_key"],
     team_key=ctx["team_key"],
     as_of_date=ctx["as_of_date"],
@@ -2713,6 +2732,23 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
 
 
 
+
+def _daily_action_plan_cache_key(ctx_obj: dict) -> str:
+    return f"daily_action_plan_{ctx_obj['league_key']}_{ctx_obj['team_key']}_{ctx_obj['as_of_date']}"
+
+
+def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
+    refresh_label = st.session_state.pop("last_successful_refresh_label_for_post_rerun", None)
+    if refresh_label != "Daily Refresh":
+        return
+
+    action_cache_key = _daily_action_plan_cache_key(ctx_obj)
+    with st.spinner("Building Daily Action Plan from Daily Refresh..."):
+        st.session_state[action_cache_key] = build_batter_daily_action_plan_preview(ctx_obj)
+
+
+_consume_daily_refresh_action_plan_build(ctx)
+
 tab_lineup, tab_recommendations, tab_slots, tab_fa, tab_policy = st.tabs(
     ["Starting Lineup", "Recommendations", "Slots", "Batter Free Agents", "Roster Policy"]
 )
@@ -2759,90 +2795,82 @@ with tab_lineup:
         key=f"combined_roster_{ctx['as_of_date']}_{lineup_projection_view}_{len(display_combined_roster_rows)}",
     )
 
+
+
 with tab_recommendations:
     st.subheader("Daily Action Plan")
     st.caption(
-        "Read-only daily planner. Uses current roster, available FAs, RotoWire lineup status, slot fit, handedness, backup timing, and tomorrow carry value."
+        "Read-only daily planner. Built by Daily Refresh only; normal tab navigation and FA filters do not run the heavy planner."
     )
 
-    top_action, action_rows, action_baseline_rows, action_summary = build_batter_daily_action_plan_preview(ctx)
+    action_cache_key = _daily_action_plan_cache_key(ctx)
 
-    st.caption(
-        " | ".join(
-            [
-                f"Now: {action_summary['now_et']}",
-                f"Baseline score: {int(action_summary['baseline_score'])}",
-                f"Drop candidates: {action_summary['drop_candidate_count']}",
-                f"FA candidates: {action_summary['fa_candidate_count']}",
-                f"Locked slots: {action_summary['locked_count']}",
-                f"Top tomorrow FA: {action_summary['top_tomorrow_fa']} ({int(action_summary['top_tomorrow_fa_rank']) if action_summary['top_tomorrow_fa_rank'] else ''})",
-            ]
-        )
-    )
-
-    if top_action:
-        top_decision = str(top_action["Decision"])
-        if top_decision == "DO NOW":
-            top_text = (
-                f"Top action: DO NOW — Drop {top_action['Drop']} for {top_action['Primary Add']} "
-                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
-                f"{top_action['Reason']}"
-            )
-        elif top_decision == "TAKE BACKUP NOW":
-            top_text = (
-                f"Top action: TAKE BACKUP NOW — Drop {top_action['Drop']} for {top_action['Backup Add']} "
-                f"(backup gain {top_action['Backup Gain']}, game {top_action['Backup Game']}). "
-                f"{top_action['Reason']}"
-            )
-        elif top_decision == "WAIT":
-            top_text = (
-                f"Top action: WAIT — Watch {top_action['Primary Add']} for possible {top_action['Drop']} replacement "
-                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}, next scan {top_action['Next Scan']}). "
-                f"{top_action['Reason']}"
-            )
-        elif top_decision == "HOLD SLOT":
-            top_text = (
-                f"Top action: HOLD SLOT — Keep {top_action['Drop']} / preserve streaming slot. "
-                f"Candidate was {top_action['Primary Add']} "
-                f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
-                f"{top_action['Reason']}"
-            )
-        else:
-            top_text = f"Top action: {top_decision} — {top_action['Reason']}"
-        st.info(top_text)
+    if action_cache_key not in st.session_state:
+        st.info("Run Daily Refresh to build today's Daily Action Plan.")
     else:
-        st.info("Top action: HOLD — no actionable daily move beats the current roster under the current rules.")
+        top_action, action_rows, action_baseline_rows, action_summary = st.session_state[action_cache_key]
 
-    if action_rows:
-        st.dataframe(
-            pd.DataFrame(action_rows),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        st.info("No replaceable players are currently eligible for a daily action plan.")
-
-    with st.expander("Baseline lineup used for daily action scoring", expanded=False):
-        st.dataframe(
-            pd.DataFrame(action_baseline_rows),
-            width="stretch",
-            hide_index=True,
-        )
-
-    with st.expander("Legacy rank-gain recommendation preview", expanded=False):
-        rec_rows, rec_baseline_rows, rec_drop_rows, rec_summary = build_batter_recommendation_preview(
-            ctx,
-            "Today",
-            5.0,
-        )
         st.caption(
-            "This older preview is kept temporarily for comparison while the Daily Action Plan is tuned."
+            " | ".join(
+                [
+                    f"Built: {action_summary['now_et']}",
+                    f"Baseline score: {int(action_summary['baseline_score'])}",
+                    f"Drop candidates: {action_summary['drop_candidate_count']}",
+                    f"FA candidates: {action_summary['fa_candidate_count']}",
+                    f"Locked slots: {action_summary['locked_count']}",
+                    f"Top tomorrow FA: {action_summary['top_tomorrow_fa']} ({int(action_summary['top_tomorrow_fa_rank']) if action_summary['top_tomorrow_fa_rank'] else ''})",
+                ]
+            )
         )
-        if rec_rows:
-            st.dataframe(pd.DataFrame(rec_rows), width="stretch", hide_index=True)
-        else:
-            st.info("Legacy preview: no recommendations meet threshold.")
 
+        if top_action:
+            top_decision = str(top_action["Decision"])
+            if top_decision == "DO NOW":
+                top_text = (
+                    f"Top action: DO NOW — Drop {top_action['Drop']} for {top_action['Primary Add']} "
+                    f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
+                    f"{top_action['Reason']}"
+                )
+            elif top_decision == "TAKE BACKUP NOW":
+                top_text = (
+                    f"Top action: TAKE BACKUP NOW — Drop {top_action['Drop']} for {top_action['Backup Add']} "
+                    f"(backup gain {top_action['Backup Gain']}, game {top_action['Backup Game']}). "
+                    f"{top_action['Reason']}"
+                )
+            elif top_decision == "WAIT":
+                top_text = (
+                    f"Top action: WAIT — Watch {top_action['Primary Add']} for possible {top_action['Drop']} replacement "
+                    f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}, next scan {top_action['Next Scan']}). "
+                    f"{top_action['Reason']}"
+                )
+            elif top_decision == "HOLD SLOT":
+                top_text = (
+                    f"Top action: HOLD SLOT — Keep {top_action['Drop']} / preserve streaming slot. "
+                    f"Candidate was {top_action['Primary Add']} "
+                    f"(gain {top_action['Primary Gain']}, game {top_action['Primary Game']}). "
+                    f"{top_action['Reason']}"
+                )
+            else:
+                top_text = f"Top action: {top_decision} — {top_action['Reason']}"
+            st.info(top_text)
+        else:
+            st.info("Top action: HOLD — no actionable daily move beats the current roster under the current rules.")
+
+        if action_rows:
+            st.dataframe(
+                pd.DataFrame(action_rows),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No replaceable players are currently eligible for a daily action plan.")
+
+        with st.expander("Baseline lineup used for daily action scoring", expanded=False):
+            st.dataframe(
+                pd.DataFrame(action_baseline_rows),
+                width="stretch",
+                hide_index=True,
+            )
 
 
 with tab_slots:

@@ -276,6 +276,7 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
 
             if proc.returncode == 0:
                 st.session_state["last_rotowire_refresh_status"] = force_rotowire_refresh_for_manual_button()
+                st.session_state["last_successful_refresh_label_for_post_rerun"] = refresh_label
 
                 try:
                     st.cache_data.clear()
