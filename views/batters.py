@@ -1653,17 +1653,24 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
             projected = max(0.0, min(max_allowed, used / elapsed * total) - 2.0)
         elif slot in {"C", "1B", "2B", "3B", "SS", "IF", "UTIL", "OF"}:
             # Best observed Yahoo-style hitter cap model:
-            # Use one shared future-games baseline derived from the active hitter occupants.
+            # Use one shared future-games baseline from league-wide remaining MLB team games.
+            # Single slots use round(avg). OF uses round(avg * 3), not round(avg) * 3.
             # Yahoo appears to allow hitter projections to exceed Max.
-            active_hitter_games = [
-                games_for_team(row["team"], today)
-                for row in current_slots
-                if row["slot"] in {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"}
+            mlb_teams = [
+                "AZ", "ATL", "BAL", "BOS", "CHC", "CIN", "CLE", "COL", "CWS", "DET",
+                "HOU", "KC", "LAA", "LAD", "MIA", "MIL", "MIN", "NYM", "NYY", "ATH",
+                "PHI", "PIT", "SD", "SEA", "SF", "STL", "TB", "TEX", "TOR", "WSH",
             ]
-            future_game_sum = sum(active_hitter_games)
-            future_game_count = len(active_hitter_games)
-            single_future = int((future_game_sum + future_game_count - 1) // future_game_count) if active_hitter_games else 0
-            of_future = int(((future_game_sum * 3) + future_game_count - 1) // future_game_count) if active_hitter_games else 0
+            league_future_games = [games_for_team(team, today) for team in mlb_teams]
+            future_game_sum = sum(league_future_games)
+            future_game_count = len(league_future_games)
+            if future_game_count:
+                avg_future = future_game_sum / future_game_count
+                single_future = int(avg_future + 0.5)
+                of_future = int((avg_future * 3) + 0.5)
+            else:
+                single_future = 0
+                of_future = 0
             future = of_future if slot == "OF" else single_future
             projected = used + future
         else:
