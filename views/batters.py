@@ -1759,11 +1759,11 @@ def _style_combined_roster_row(row):
 
     lineup = str(row.get("Lineup") or "")
 
-    if lineup == "IN_POSTED_LINEUP":
-        row_style = "background-color: #17351f; color: #d7f5df;"
-    elif lineup == "POSTED_BUT_NOT_FOUND" or "RW Expected Out" in lineup or "RW Posted Out" in lineup:
+    if lineup == "POSTED_BUT_NOT_FOUND" or "POSTED_BUT_NOT_FOUND" in lineup or "RW Posted Out" in lineup:
         row_style = "background-color: #4a232b; color: #ffd9df;"
-    elif "RW Expected In" in lineup or "RW Posted In" in lineup:
+    elif lineup == "IN_POSTED_LINEUP" or "IN_POSTED_LINEUP" in lineup or "RW Expected In" in lineup or "RW Posted In" in lineup:
+        row_style = "background-color: #17351f; color: #d7f5df;"
+    elif "RW Expected Out" in lineup:
         row_style = "background-color: #3a3217; color: #f7efc6;"
     else:
         row_style = ""
