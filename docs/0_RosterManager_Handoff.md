@@ -1,6 +1,6 @@
 # Roster Manager Handoff
 
-**Last updated:** 2026-05-24  
+**Last updated:** 2026-06-18  
 **Project:** MajorLeagueFantasy-RosterManager  
 **Primary repo path:** `/Volume1/Bots/fantasy/mlf_roster_manager`  
 **Windows/UNC path:** `\\Apollo\Bots\fantasy\mlf_roster_manager`
@@ -11,7 +11,7 @@
 
 Daily roster-management tool for personal fantasy baseball lineup decisions across RMT instances.
 
-The current highest-value workflow is the **Usual-RMT batter decision system**, including live lineup ranking, future batter projection views, Batter Free Agents, slot-cap pressure, and drop/add planning groundwork.
+The current highest-value workflow is the **Usual-RMT batter decision system**, including live lineup ranking, future batter projection views, Batter Free Agents, slot-cap pressure, daily action planning, and RMT-vs-YGMA model evaluation.
 
 Current scope:
 - **Primary UI:** Streamlit
@@ -19,8 +19,10 @@ Current scope:
 - **Primary runtime style:** Docker containers
 - **Primary current instance:** `usual-rmt` on port `8050`
 - **Additional RMT instances:** `mlf_rmt` on port `8051`, `milf_rmt` on port `8052`
-- **Current next feature target:** Roster Experiment / Add-Drop Watchlist
+- **Current next evidence target:** RMT-v2 gate-threshold audit for startability, reliability, and elite-player protection.
+- **Next product/UI feature after gate proof:** Roster Experiment / Add-Drop Watchlist.
 - **Current known weak spot:** Usual-RMT pitcher IP projection is approximate; batter max-games projection currently matches Yahoo-style behavior.
+- **Current model caution:** Do not patch RMT scoring weights until the RMT-vs-YGMA gate audit identifies rules that preserve good RMT spot-start signal while blocking bad overrides.
 
 ---
 
@@ -53,6 +55,34 @@ Follow these strictly:
 - Inside containers, use `python` / `python3` from `/app`.
 - NAS shell does **not** have Git. Run Git from Windows PowerShell against the UNC path.
 - NAS uses `docker-compose`, not the newer `docker compose` plugin.
+
+### Remote access / Tailscale
+
+Tailscale has been proven running on Apollo during the June 2026 remote-access setup.
+
+Current known Tailnet devices from `tailscale status`:
+- Apollo NAS: `100.93.229.49`
+- Windows laptop `steady2`: `100.114.190.31`
+
+Important facts:
+- `/usr/bin/tailscale` and `/usr/sbin/tailscaled` exist on Apollo.
+- Docker Tailscale failed because a native `tailscaled` process already owned `tailscale0`.
+- The working command started native `tailscaled` manually with `nohup`.
+- The daemon is authenticated under `chris.h.lyman@gmail.com`.
+- This setup is useful for reaching app ports and NAS network services over the Tailnet.
+
+Cautions:
+- This manual `nohup` start is **not yet proven persistent after NAS reboot**.
+- Do not reboot Apollo before persistence is proven.
+- SSH on port `22` previously returned `connection refused`; Tailscale reachability does not prove TerraMaster SSH service is enabled.
+- Remote development is proven only after laptop hotspot testing reaches the RMT apps and/or SMB share.
+
+Useful remote URLs after laptop is on Tailscale:
+- Usual-RMT: `http://100.93.229.49:8050`
+- MLF-RMT: `http://100.93.229.49:8051`
+- MiLF-RMT: `http://100.93.229.49:8052`
+- NAS share candidate: `\\100.93.229.49\Bots`
+
 
 ### Current containers and ports
 
@@ -126,15 +156,24 @@ Rules:
 - Keep commits small and deterministic.
 - Runtime/Docker proof happens over NAS SSH; Git proof happens from PowerShell.
 
+Latest known repo proof from Windows PowerShell:
+- Working tree was clean.
+- `HEAD -> main`, `origin/main`, and `origin/HEAD` pointed to `dacf682`.
+- Git operations are still run from Windows PowerShell against the UNC path.
+
 Latest known pushed commits from the recent work:
-- `32ae292 Carry projected game status into future batter optimization`
-- `f4d6b35 Refresh projection game context for multi-day batter views`
-- `fe02326 Add batter multi-day projection views`
-- `35a57c4 Use OPS gap for batter handedness scoring`
-- `adec0ac Use dynamic Yahoo-style hitter cap projection`
-- `82a73c3 Use Yahoo dated roster for Usual cap usage`
-- `eb41965 Relax Usual batter threshold when slots are not ahead`
-- `d212b1b Separate batter and pitcher roster policy views`
+- `dacf682 Use Yahoo-style league average hitter cap projection`
+- `4aef775 Update lineup row color rules`
+- `d92483e Build batter action plan after daily refresh`
+- `0ffac87 Add daily batter action plan`
+- `e9085b4 Use ceil for Usual OF cap projection`
+- `b8c8c74 Add read-only batter recommendations tab`
+- `f2ce2b4 Prefer behind-pace hitter slots in optimizer`
+- `5bf2b6b Match Yahoo hitter cap projection rounding`
+- `09983fd Expose batter roster policy status`
+- `e9bd3fd Lock started Yahoo hitter slots in Today optimizer`
+- `ffb804a Color starting lineup rows by lineup confidence`
+- `7902086 Refresh RotoWire data during manual refresh`
 
 ---
 
@@ -163,11 +202,19 @@ Latest known pushed commits from the recent work:
 
 ### Current UI tabs under Batters
 
-Batters internal tabs:
+Batters internal tabs known from prior docs:
 - Starting Lineup
 - Slots
 - Batter Free Agents
 - Roster Policy
+
+Recent commits also indicate:
+- read-only batter recommendations tab
+- daily batter action plan
+- action plan build after daily refresh
+- updated lineup row color rules
+
+Before modifying the recommendations/action-plan UI, verify the exact active tab names and helper functions in `views/batters.py`.
 
 Starting Lineup and Batter Free Agents now have a **Projection View** radio selector:
 - Today
@@ -242,13 +289,19 @@ Important current behavior:
 
 Hitter max-game projection currently matches Yahoo-style behavior closely.
 
-Current approach:
+Current approach after latest proof:
 - Calculate current used from seed + daily usage.
-- Use a shared future-games baseline derived from current active hitter occupants.
+- Use Yahoo-style league-average MLB remaining games as the future-games baseline.
+- Single-slot future games use half-up rounding from the average remaining MLB team games.
+- OF future games use half-up rounding of `average_remaining_games * 3`, not `round(single_slot) * 3`.
 - Yahoo appears to allow hitter projections to exceed Max.
-- OF uses a 3-slot future baseline.
+- Latest relevant commit: `dacf682 Use Yahoo-style league average hitter cap projection`.
 
-Recent Yahoo/RMT alignment example:
+Recent proof pattern:
+- Yahoo OF projection was matched by averaging remaining games across MLB teams and multiplying by three before rounding.
+- This replaced earlier active-roster-only future baseline logic.
+
+Older Yahoo/RMT alignment example retained as historical context:
 - C `48/114/159/-3`
 - 1B `52/110/163/+1`
 - 2B `52/110/163/+1`
@@ -264,10 +317,22 @@ Pitcher IP **actual used/remaining** is based on Yahoo daily IP actuals and is c
 
 Pitcher IP **projection/diff** is approximate.
 
-What was proven:
+What was proven earlier:
 - Yahoo API endpoints tested did not expose the displayed max-games/IP projection table directly.
 - Tested endpoints returned league/team/roster/stats data, but not the UI table fields `Played / Remaining / Projected / Max`.
 - Local code currently has daily `stat_id 50` IP actuals, but the projected IP value is RMT-local logic.
+
+Newer user-assisted Yahoo UI observation:
+- Yahoo’s displayed projected IP appeared to equal current used IP plus the sum of displayed remaining projected IP for current starting pitchers.
+- The Yahoo UI remaining projected IP values appeared to be floored per pitcher before summing.
+- Example pattern supplied by the user: `48.1 -> 48`, `41.2 -> 41`, `84.8 -> 84`.
+- In that observation, floor-summing UI remaining projected IP gave `852`; `589 + 852 = 1441`, matching Yahoo’s displayed projected IP.
+
+Important interpretation:
+- This is an **ingestion gap**, not a formula patch.
+- RMT does not currently ingest those Yahoo UI remaining projected IP values.
+- Existing local `stat_id 50` values are current/actual IP stats, not Yahoo UI rest-of-season projected IP.
+- Do not substitute current-season IP totals as ROS projected IP.
 
 Current caution:
 - Do not claim P projected/diff exactly match Yahoo.
@@ -284,7 +349,7 @@ Useful proof points:
 Recommended handling:
 - Keep batter cap projection as Yahoo-style.
 - Mark pitcher projection/diff approximate.
-- Revisit only after collecting more Yahoo UI observations or finding a direct Yahoo source.
+- Revisit only after finding a direct source for Yahoo UI remaining projected IP or collecting enough UI observations to build a stable, documented ingestion/model approach.
 
 ---
 
@@ -306,6 +371,22 @@ Patch intent:
 Recent proof showed:
 - C / 3B / SS / IF / OF / UTIL threshold `0.0` when not ahead.
 - 1B and 2B should enforce threshold when at `+1`.
+
+### Recent optimizer / recommendation commits
+
+Recent commits indicate additional optimizer and recommendation behavior:
+- `e9bd3fd Lock started Yahoo hitter slots in Today optimizer`
+- `f2ce2b4 Prefer behind-pace hitter slots in optimizer`
+- `b8c8c74 Add read-only batter recommendations tab`
+- `0ffac87 Add daily batter action plan`
+- `d92483e Build batter action plan after daily refresh`
+- `4aef775 Update lineup row color rules`
+- `ffb804a Color starting lineup rows by lineup confidence`
+
+Interpretation rules:
+- Treat these as implemented code checkpoints, but verify exact current behavior in `views/batters.py` and live app rows before modifying.
+- Do not add Yahoo write actions from recommendation/action-plan surfaces until read-only behavior is stable.
+- Started Yahoo hitter slots should remain protected from Today optimizer churn unless direct proof supports changing that behavior.
 
 ### Future-view optimizer bug fixed
 
@@ -529,6 +610,109 @@ Policy should eventually support all RMTs, not only Usual-RMT.
 
 ---
 
+## RMT vs YGMA model evaluation
+
+### Status
+
+The current model-improvement target is not an immediate scoring-weight patch.
+
+The next evidence target is a **RMT-v2 gate-threshold audit** to determine which simple rules preserve RMT's useful spot-start signal while blocking weak overrides against reliable YGMA-style alternatives.
+
+### Evaluation files / artifacts
+
+Generated model-testing workbooks are evidence artifacts, not source code.
+
+Recent generated audit workbooks from the ChatGPT analysis environment:
+- `YGMA_vs_RMT_Deterministic_Audit_2026-05-16_to_06-09.xlsx`
+- `RMT_Baseline_Flexible_Slot_Matched_YGMA_Audit_2026-05-16_to_06-09.xlsx`
+- `RMT_Fringe_vs_Reliable_YGMA_Test_2026-05-16_to_06-09.xlsx`
+
+Do not commit generated `.xlsx` audit workbooks unless intentionally promoted into a documented evidence/fixture folder.
+
+### Broad deterministic audit
+
+Coverage:
+- 69 league-day workbooks.
+- Dates: 2026-05-16 through 2026-06-09, excluding 2026-05-30 and 2026-05-31.
+- Leagues: Usual, MLF, MiLF.
+- Tabs used: Results, RMT, YGMA. LE should be ignored going forward unless explicitly reintroduced.
+
+Broad result:
+- YGMA won more league-days than RMT.
+- YGMA had stronger opportunity/production volume.
+- RMT had some batting-average advantage but did not beat YGMA overall.
+
+Interpretation:
+- As a one-shot morning picker, YGMA was safer and more reliable.
+- Broad scoring penalized RMT for speculative spot-starts that the user later replaced after lineup information changed.
+
+### Flexible slot-matched audit
+
+Purpose:
+- Test RMT more fairly by only evaluating RMT picks that survived into the final Results lineup.
+- Allow flexible positional movement, including 1B/UTIL-style swaps and pooled OF slots.
+
+Result:
+- RMT and YGMA were roughly even by league-day after RMT survival filtering.
+- RMT performed better in MLF than in Usual/MiLF.
+- RMT still did not prove broad superiority over YGMA.
+
+Interpretation:
+- RMT has some real spot-start signal.
+- The signal is not strong enough to justify overriding reliable players without a startability/reliability gate.
+
+### Fringe-vs-reliable audit
+
+Purpose:
+- Test the user's hypothesis that RMT finds useful low/fringe spot-starts but may overvalue them against reliable YGMA alternatives.
+
+Primary finding:
+- RMT fringe candidates survived final lineup only about 61.8% of the time.
+- When RMT candidates were confirmed in posted lineups, they were competitive with YGMA.
+- When lineup status was not confirmed, RMT was much riskier.
+- RMT found AVG/SB and some HR upside, but YGMA still won more runs, walks, strikeout safety, and slightly RBI overall.
+
+Interpretation:
+- The issue is not that RMT cannot find spot starts.
+- The issue is that RMT allows speculative matchup candidates to override reliable players too early.
+
+### Current model direction
+
+Do not patch scoring weights yet.
+
+First RMT-v2 design should be a gate/label system:
+- `Start`
+- `Lean Start`
+- `Watch`
+- `Bench`
+
+Recommended gate concepts to audit:
+- Require confirmed lineup or strong expected-start evidence before a fringe player can override a reliable player.
+- Treat pre-lineup fringe picks as `Watch` rather than automatic `Start`.
+- Protect elite/everyday bats unless RMT edge clears a larger threshold.
+- Penalize or block lower-order projected starts if the reliable alternative is strong.
+- Shrink platoon/split-driven edges when sample size or start probability is weak.
+- Split strategy by league:
+  - Usual-RMT: roto marginal category value plus games-cap context.
+  - MLF/MiLF: weekly H2H category leverage.
+
+### Next proof target
+
+Build a deterministic gate-threshold audit before changing production recommendations.
+
+Suggested audit output:
+- candidate picks allowed
+- candidate picks blocked
+- RMT win rate when allowed
+- YGMA win rate when blocked
+- impact by league
+- impact by category
+- category impact for AVG/R/HR/RBI/SB/BB/K
+- results by lineup status
+- results by batting-order bucket
+- results by reliability gap
+
+
 ## Current confirmed working state
 
 These are considered working unless new proof contradicts them:
@@ -551,6 +735,8 @@ These are considered working unless new proof contradicts them:
 - Future projected ranks display as integers.
 - Future projected game status is carried into optimizer logic.
 - Future projection explainer is present.
+- Recent commits indicate a read-only batter recommendations tab and daily batter action plan exist; verify exact current UI behavior in `views/batters.py` before modifying.
+- Today optimizer should lock started Yahoo hitter slots unless direct proof supports changing that behavior.
 
 ### Refresh
 - `runtime/refresh_live.sh` runs and now refreshes projection game context.
@@ -573,8 +759,27 @@ These are considered working unless new proof contradicts them:
 
 ## Current known issues / remaining work
 
-### 1. Roster Experiment / Add-Drop Watchlist
-Status: **Next recommended feature.**
+### 1. RMT-v2 gate-threshold audit
+Status: **Next recommended evidence target.**
+
+Goal:
+- Determine which reliability/startability/elite-player gates would improve RMT decisions without overfitting.
+- Preserve RMT's useful spot-start signal.
+- Block speculative fringe overrides when a reliable YGMA-style alternative is safer.
+- Produce a deterministic rule recommendation before patching scoring weights.
+
+Candidate gates to test:
+- confirmed lineup required for fringe-over-reliable override
+- batting-order bucket threshold
+- elite/everyday player protection
+- reliability gap threshold using Start%, Ros%, and pre-season rank
+- league-specific category leverage
+- separate `Watch` vs `Start` classification
+
+Do not change production scoring weights until this audit is complete.
+
+### 2. Roster Experiment / Add-Drop Watchlist
+Status: **Next product/UI feature after model gate proof.**
 
 Goal:
 - Compare owned drop candidates vs FA add candidates across:
@@ -601,7 +806,7 @@ Suggested table:
 
 Do not add Yahoo write actions yet.
 
-### 2. Rest of Week / Rest of Season
+### 3. Rest of Week / Rest of Season
 Status: **Not built.**
 
 Rest of Week requires reliable future game context for more dates.
@@ -609,7 +814,7 @@ Rest of Season requires a real ROS projection source or a clearly labeled approx
 
 Do not fake these.
 
-### 3. Pitcher workflow
+### 4. Pitcher workflow
 Status: **V1 exists but is not mature.**
 
 Known needs:
@@ -620,7 +825,7 @@ Known needs:
 - IP cap planning
 - clear separation of SP and RP decisions
 
-### 4. Pitcher IP projection
+### 5. Pitcher IP projection
 Status: **Approximate.**
 
 Do not overfit the current formula.
@@ -629,15 +834,15 @@ Either:
 - find a direct Yahoo source, or
 - collect more Yahoo UI observations and build a stable model.
 
-### 5. MLBAM disambiguation
+### 6. MLBAM disambiguation
 Known weak area:
 - ambiguous names such as Jose Fernandez
 - some mappings may still have blank/missing team disambiguation
 
-### 6. Recent H/AB
+### 7. Recent H/AB
 Recent H/AB still needs a true last-7 AVG contribution if the current feed lacks real H/AB.
 
-### 7. Future opportunity denominator
+### 8. Future opportunity denominator
 Future opportunity logic is still optimistic because it treats team game-days as playable opportunities and does not fully discount:
 - rest days
 - platoons
@@ -652,6 +857,41 @@ Future improvement:
 ---
 
 ## Known-good commands
+
+### Prove Tailscale remote access on Apollo
+
+```bash
+echo "=== TAILSCALE ==="
+/usr/bin/tailscale status || true
+/usr/bin/tailscale ip -4 || true
+
+echo
+echo "=== RMT HTTP OVER TAILSCALE IP FROM APOLLO ==="
+for port in 8050 8051 8052; do
+  echo "PORT=$port"
+  curl -I --max-time 10 "http://100.93.229.49:${port}" | sed -n '1,6p'
+done
+```
+
+From laptop on phone hotspot:
+
+```powershell
+tailscale status
+ping 100.93.229.49
+
+# Browser checks:
+# http://100.93.229.49:8050
+# http://100.93.229.49:8051
+# http://100.93.229.49:8052
+
+# Optional SMB check:
+# \\100.93.229.49\Bots
+```
+
+Caution:
+- SSH on port `22` is not proven working.
+- Manual `tailscaled` startup is not reboot-persistent until proven.
+
 
 ### Restart all RMT containers
 
@@ -890,6 +1130,23 @@ PY
 
 ## How to investigate without guessing
 
+### Model evaluation / RMT-vs-YGMA audits
+Check:
+1. generated audit workbooks from the model-testing analysis
+2. raw daily workbooks with `Results`, `RMT`, and `YGMA` tabs
+3. whether comparisons are broad, slot-matched, or RMT-survival filtered
+4. lineup status bucket
+5. reliability bucket
+6. batting-order bucket
+7. league-specific category objective
+
+Rules:
+- Ignore LE unless explicitly reintroduced.
+- Do not treat a backtest-only improvement as production-ready.
+- Prefer simple rules that generalize across leagues and categories.
+- Do not patch scoring weights until a gate-threshold audit shows which rule class is supported.
+
+
 ### UI behavior
 Check:
 1. `views/batters.py`
@@ -976,5 +1233,7 @@ Use this when starting a fresh chat:
 > Starting Lineup and Batter Free Agents both support Projection View radio buttons for Today, Tomorrow, and Day After Tomorrow.
 > Future batter ranks are RMT projections using future game context, probable pitchers, handedness, splits, recent form, and current true FA pool; lineups are not confirmed.
 > Usual batter max-games projection matches Yahoo-style behavior; Usual pitcher IP projected/diff is approximate unless proven otherwise.
-> Next recommended feature is Roster Experiment / Add-Drop Watchlist.
+> Current model-testing direction: RMT has useful spot-start signal, but it should not override reliable/YGMA-style players without startability/reliability gates.
+> Next recommended evidence target is the RMT-v2 gate-threshold audit. Next product/UI feature after gate proof is Roster Experiment / Add-Drop Watchlist.
+> Tailscale remote access was manually started on Apollo; Apollo Tailnet IP is 100.93.229.49. Do not assume reboot persistence or SSH port 22 until proven.
 > When investigating, prefer current files, DB, logs, CSV outputs, and live row proof over theorizing.
