@@ -2347,8 +2347,10 @@ def _daily_action_rw_bucket(row: dict | None) -> str:
         return "POSTED_IN"
     if "RW Expected In" in s:
         return "EXPECTED_IN"
-    if "POSTED_BUT_NOT_FOUND" in s or "RW Expected Out" in s or "RW Posted Out" in s:
-        return "OUT"
+    if "POSTED_BUT_NOT_FOUND" in s or "RW Posted Out" in s:
+        return "POSTED_OUT"
+    if "RW Expected Out" in s:
+        return "EXPECTED_OUT"
     if "LINEUP_NOT_CONFIRMED" in s:
         return "UNKNOWN"
     if "PROJECTED" in s:
@@ -2362,8 +2364,14 @@ def _daily_action_status_score(row: dict | None) -> int:
         "EXPECTED_IN": 3,
         "PROJECTED": 2,
         "UNKNOWN": 1,
+        "EXPECTED_OUT": 0,
+        "POSTED_OUT": 0,
         "OUT": 0,
     }.get(_daily_action_rw_bucket(row), 0)
+
+
+def _daily_action_candidate_excluded(row: dict | None) -> bool:
+    return _daily_action_rw_bucket(row) in {"POSTED_OUT", "EXPECTED_OUT", "OUT"}
 
 
 def _daily_action_next_scan_time(ctx_obj: dict, row: dict | None):
@@ -2544,7 +2552,7 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
         fa_candidates.append(r)
 
     def choose_primary(candidates: list[dict]) -> dict | None:
-        viable = [c for c in candidates if c["rank_gain"] >= c["min_gain"] and _daily_action_rw_bucket(c["add"]) != "OUT"]
+        viable = [c for c in candidates if c["rank_gain"] >= c["min_gain"] and not _daily_action_candidate_excluded(c["add"])]
         if not viable:
             return None
 
@@ -2593,7 +2601,7 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
             c for c in candidates
             if c["add_name"] != primary["add_name"]
             and c["rank_gain"] >= BACKUP_MIN_GAIN
-            and _daily_action_rw_bucket(c["add"]) != "OUT"
+            and not _daily_action_candidate_excluded(c["add"])
         ]
 
         if not pool:
