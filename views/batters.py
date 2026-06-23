@@ -408,6 +408,47 @@ SUFFIXES = {"JR", "JR.", "SR", "SR.", "II", "III", "IV", "V"}
 BASE_START_THRESHOLD = 50.0
 SLOT_MIN_RANKING_OVERRIDES: dict[str, float] = {}
 
+# Usual-RMT reservation floors from the first RMT-v2 threshold audit.
+# These are slot-specific starting points based on recent FA replacement depth.
+USUAL_SLOT_REPLACEMENT_FLOORS: dict[str, float] = {
+    "C": 57.0,
+    "1B": 56.0,
+    "2B": 59.0,
+    "3B": 57.0,
+    "SS": 55.0,
+    "IF": 60.0,
+    "OF": 60.0,
+    "UTIL": 63.0,
+}
+USUAL_ON_PACE_REPLACEMENT_DISCOUNT = 4.0
+USUAL_OVER_PACE_STEP = 2.0
+
+
+def usual_slot_reservation_threshold(slot: str, diff: float, schedule_floor: float) -> float:
+    """Minimum rank worth spending a capped Usual-RMT hitter start."""
+    slot = str(slot or "").upper()
+    replacement_floor = float(USUAL_SLOT_REPLACEMENT_FLOORS.get(slot, BASE_START_THRESHOLD))
+
+    if diff < -1.0:
+        return 0.0
+
+    if diff < 0.0:
+        return BASE_START_THRESHOLD
+
+    if diff < 1.0:
+        return max(BASE_START_THRESHOLD, replacement_floor - USUAL_ON_PACE_REPLACEMENT_DISCOUNT)
+
+    if diff < 2.0:
+        return max(schedule_floor, replacement_floor - USUAL_ON_PACE_REPLACEMENT_DISCOUNT)
+
+    if diff < 3.0:
+        return max(schedule_floor, replacement_floor)
+
+    if diff < 4.0:
+        return max(schedule_floor, replacement_floor + USUAL_OVER_PACE_STEP)
+
+    return max(schedule_floor, replacement_floor + (USUAL_OVER_PACE_STEP * 2.0))
+
 TEAM_NAME_TO_ABBR = {
     "ARIZONA DIAMONDBACKS": "AZ",
     "ATHLETICS": "ATH",
@@ -577,9 +618,9 @@ def slot_min_ranking(slot_id: str, slot_type: str) -> float:
         return 1.0
 
     try:
-        base_threshold = float(_CURRENT_SLOT_FLOORS.get(slot_type, 50.0))
+        schedule_floor = float(_CURRENT_SLOT_FLOORS.get(slot_type, 50.0))
     except Exception:
-        base_threshold = 50.0
+        schedule_floor = 50.0
 
     ctx_obj = globals().get("ctx") or {}
     if str(ctx_obj.get("league_key") or "").strip() == USUAL_CAP_USAGE_LEAGUE_KEY:
@@ -589,13 +630,9 @@ def slot_min_ranking(slot_id: str, slot_type: str) -> float:
         except Exception:
             diff = 0.0
 
-        # Usual-RMT rule:
-        # Only enforce the start threshold when the slot is projected ahead by at least +1.
-        # If the slot is even or behind pace, maximize total lineup rank instead.
-        if diff < 1.0:
-            return 0.0
+        return usual_slot_reservation_threshold(slot, diff, schedule_floor)
 
-    return base_threshold
+    return schedule_floor
 
 
 def startable_for_slot(row: dict, slot_id: str, slot_type: str) -> bool:
