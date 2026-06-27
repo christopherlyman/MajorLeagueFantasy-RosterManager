@@ -771,6 +771,9 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         COALESCE(r.status, '') AS status,
         r.yahoo_player_key,
         p.percent_owned,
+        COALESCE(rb.rank_reliability_points, 0) AS rank_reliability_points,
+        COALESCE(rb.reliability_label, 'No reliability bump') AS reliability_label,
+        COALESCE(rb.reliability_reason, '') AS reliability_reason,
         COALESCE(rp.policy_status, 'DROPPABLE_LOW') AS policy_status,
         CASE
             WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = r.mlb_team_abbr
@@ -803,6 +806,11 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
       ON p.league_key = r.league_key
      AND p.season_year = %s
      AND p.yahoo_player_key = r.yahoo_player_key
+    LEFT JOIN public.yahoo_batter_rank_reliability rb
+      ON rb.league_key = r.league_key
+     AND rb.season_year = %s
+     AND rb.as_of_date = r.as_of_date
+     AND rb.yahoo_player_key = r.yahoo_player_key
     LEFT JOIN rmt.roster_player_policy rp
       ON rp.league_key = r.league_key
      AND rp.team_key = r.team_key
@@ -822,7 +830,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
             )
             day_game_rows = cur.fetchone()[0]
 
-            cur.execute(sql, (as_of_date, _season_year(as_of_date), as_of_date, league_key, team_key))
+            cur.execute(sql, (as_of_date, _season_year(as_of_date), _season_year(as_of_date), as_of_date, league_key, team_key))
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -990,6 +998,9 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         p.yahoo_player_key,
         p.percent_owned,
         p.rank_value,
+        COALESCE(rb.rank_reliability_points, 0) AS rank_reliability_points,
+        COALESCE(rb.reliability_label, 'No reliability bump') AS reliability_label,
+        COALESCE(rb.reliability_reason, '') AS reliability_reason,
         CASE
             WHEN g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
                 THEN g.home_probable_pitcher_name
@@ -1014,6 +1025,11 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         COALESCE(g.raw_json->>'gameDate', '') AS game_date_utc,
         g.raw_json AS raw_json
     FROM public.yahoo_league_player_pool p
+    LEFT JOIN public.yahoo_batter_rank_reliability rb
+      ON rb.league_key = p.league_key
+     AND rb.season_year = p.season_year
+     AND rb.as_of_date = %s
+     AND rb.yahoo_player_key = p.yahoo_player_key
     LEFT JOIN games g
       ON g.raw_json->'teams'->'away'->'team'->>'abbreviation' = p.editorial_team_abbr
       OR g.raw_json->'teams'->'home'->'team'->>'abbreviation' = p.editorial_team_abbr
@@ -1068,6 +1084,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
             cur.execute(
                 sql,
                 (
+                    as_of_date,
                     as_of_date,
                     league_key,
                     as_of_date,

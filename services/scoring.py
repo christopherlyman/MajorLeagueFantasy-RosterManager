@@ -344,6 +344,10 @@ def compute_lineup_points(row: Mapping[str, Any]) -> float:
     return 0.0
 
 
+def compute_rank_reliability_points(row: Mapping[str, Any]) -> float:
+    return round(_clamp(_num(row.get("rank_reliability_points")), 0.0, 8.0), 2)
+
+
 def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, Any]:
     override = _status_override(str(row.get("status_display") or row.get("status") or ""))
     if override is not None:
@@ -388,6 +392,9 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
     status_risk_points = compute_status_risk_points(row)
     lineup_points = compute_lineup_points(row)
     status_points = status_risk_points + lineup_points
+    rank_reliability_points = compute_rank_reliability_points(row)
+    reliability_label = str(row.get("reliability_label") or "").strip()
+    reliability_reason = str(row.get("reliability_reason") or "").strip()
 
     ranking = _clamp(
         NEUTRAL_RANKING
@@ -397,6 +404,7 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         + home_away_points
         + day_night_points
         + recent_form_points
+        + rank_reliability_points
         + status_risk_points
         + lineup_points,
         MIN_RANKING,
@@ -410,8 +418,13 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         f"Home/Away {home_away_points:+.1f}",
         f"Day/Night {day_night_points:+.1f}",
         f"Recent {recent_form_points:+.1f}",
-        f"Status {status_points:+.1f}",
     ]
+    if rank_reliability_points:
+        reliability_note = f"Reliability {rank_reliability_points:+.1f}"
+        if reliability_label and reliability_label != "No reliability bump":
+            reliability_note = f"{reliability_note} {reliability_label}"
+        note_parts.append(reliability_note)
+    note_parts.append(f"Status {status_points:+.1f}")
     if str(row.get("game_status") or "").strip().upper() == "GAME_DATA_MISSING":
         note_parts.append("Game data missing")
     if str(row.get("lineup_status") or "").strip().upper() == "LINEUP_DATA_MISSING":
@@ -427,6 +440,9 @@ def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, A
         "home_away_points": home_away_points,
         "day_night_points": day_night_points,
         "recent_form_points": recent_form_points,
+        "rank_reliability_points": rank_reliability_points,
+        "reliability_label": reliability_label,
+        "reliability_reason": reliability_reason,
         "status_risk_points": status_risk_points,
         "lineup_points": lineup_points,
         "note_short": " | ".join(note_parts),
