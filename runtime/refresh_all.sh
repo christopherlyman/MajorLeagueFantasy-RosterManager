@@ -182,6 +182,19 @@ else
   echo "SKIP player pool refresh for mode=$MODE"
 fi
 
+stage "REFRESH ALL: YAHOO AR BATTER RELIABILITY"
+docker exec -i "$APP_CONTAINER" bash -lc "
+cd /app && \
+PYTHONPATH=/app \
+python scripts/yahoo/refresh_batter_rank_reliability.py \
+  --league-key $LEAGUE_KEY \
+  --season-year ${TODAY:0:4} \
+  --as-of-date $TODAY \
+  --depth ${YAHOO_AR_RANK_DEPTH:-1000} \
+  --sleep-seconds ${YAHOO_SLEEP_SECONDS:-0.25} \
+  --targets \"Juan Soto,Gunnar Henderson,Ryan Kreidler,Paul Goldschmidt\"
+"
+
 stage "REFRESH ALL: RECENT PIPELINE"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app/scripts/yahoo && \
