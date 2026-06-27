@@ -2789,6 +2789,137 @@ def _daily_action_plan_cache_key(ctx_obj: dict) -> str:
     return f"daily_action_plan_{ctx_obj['league_key']}_{ctx_obj['team_key']}_{ctx_obj['as_of_date']}"
 
 
+def _daily_action_cached_filter_names(player_rows: list[dict]) -> set[str]:
+    return {
+        _daily_action_player_key(row)
+        for row in player_rows
+        if _daily_action_player_key(row)
+    }
+
+
+def _daily_action_cached_float(value) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _daily_action_cached_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _daily_action_cached_row_invalid_reason(
+    action_row: dict,
+    owned_names: set[str],
+    fa_names: set[str],
+) -> str:
+    decision = str(action_row.get("Decision") or "")
+    drop_name = str(action_row.get("Drop") or "")
+    primary_name = str(action_row.get("Primary Add") or "")
+    backup_name = str(action_row.get("Backup Add") or "")
+    backup_valid = _daily_action_cached_bool(action_row.get("Backup Valid"))
+
+    if not decision or decision == "HOLD":
+        return ""
+
+    if drop_name and drop_name not in owned_names:
+        return f"drop candidate {drop_name} is no longer on the roster"
+
+    if primary_name:
+        if primary_name in owned_names:
+            return f"primary add {primary_name} is already on the roster"
+        if primary_name not in fa_names:
+            return f"primary add {primary_name} is no longer available"
+    elif decision in {"DO NOW", "WAIT"}:
+        return "primary add is missing"
+
+    if decision == "TAKE BACKUP NOW":
+        if not backup_name:
+            return "backup add is missing"
+        if backup_name in owned_names:
+            return f"backup add {backup_name} is already on the roster"
+        if backup_name not in fa_names:
+            return f"backup add {backup_name} is no longer available"
+
+    if decision == "WAIT" and backup_name and backup_valid:
+        if backup_name in owned_names:
+            return f"backup add {backup_name} is already on the roster"
+        if backup_name not in fa_names:
+            return f"backup add {backup_name} is no longer available"
+
+    return ""
+
+
+def _daily_action_pick_top_cached_action(action_rows: list[dict]) -> dict | None:
+    decision_priority = {
+        "DO NOW": 5,
+        "TAKE BACKUP NOW": 4,
+        "WAIT": 3,
+        "HOLD SLOT": 2,
+    }
+
+    candidates = [
+        row
+        for row in action_rows
+        if decision_priority.get(str(row.get("Decision") or ""), 0) > 0
+    ]
+
+    if not candidates:
+        return None
+
+    return sorted(
+        candidates,
+        key=lambda row: (
+            decision_priority.get(str(row.get("Decision") or ""), 0),
+            _daily_action_cached_float(row.get("Primary Gain")),
+            _daily_action_cached_float(row.get("Backup Gain")),
+            _daily_action_cached_float(row.get("Primary Rank")),
+            str(row.get("Primary Add") or ""),
+        ),
+        reverse=True,
+    )[0]
+
+
+def _daily_action_filter_cached_plan_for_current_state(
+    cached_plan: tuple[dict | None, list[dict], list[dict], dict],
+    owned_rows: list[dict],
+    fa_rows: list[dict],
+) -> tuple[dict | None, list[dict], list[dict], dict, dict]:
+    top_action, action_rows, baseline_rows, summary = cached_plan
+
+    owned_names = _daily_action_cached_filter_names(owned_rows)
+    fa_names = _daily_action_cached_filter_names(fa_rows)
+
+    filtered_rows = []
+    removed_reasons = []
+
+    for action_row in action_rows:
+        reason = _daily_action_cached_row_invalid_reason(action_row, owned_names, fa_names)
+        if reason:
+            removed_reasons.append(reason)
+            continue
+        filtered_rows.append(action_row)
+
+    promoted_top_action = _daily_action_pick_top_cached_action(filtered_rows)
+
+    filter_summary = {
+        "removed_count": len(removed_reasons),
+        "removed_reasons": removed_reasons[:5],
+        "actionable_before_count": len([
+            row for row in action_rows
+            if str(row.get("Decision") or "") not in {"", "HOLD"}
+        ]),
+        "actionable_after_count": len([
+            row for row in filtered_rows
+            if str(row.get("Decision") or "") not in {"", "HOLD"}
+        ]),
+    }
+
+    return promoted_top_action, filtered_rows, baseline_rows, summary, filter_summary
+
+
 def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
     refresh_label = st.session_state.pop("last_successful_refresh_label_for_post_rerun", None)
     if not refresh_label:
@@ -2802,10 +2933,7 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
         return
 
     if refresh_label == "Quick Refresh":
-        st.session_state.pop(action_cache_key, None)
-        st.session_state[f"{action_cache_key}_stale_reason"] = (
-            "Quick Refresh updated roster/FA data. Run Daily Refresh to rebuild the Daily Action Plan."
-        )
+        st.session_state[f"{action_cache_key}_quick_refreshed"] = True
 
 
 _consume_daily_refresh_action_plan_build(ctx)
@@ -2873,7 +3001,30 @@ with tab_recommendations:
         else:
             st.info("Run Daily Refresh to build today's Daily Action Plan.")
     else:
-        top_action, action_rows, action_baseline_rows, action_summary = st.session_state[action_cache_key]
+        cached_plan = st.session_state[action_cache_key]
+        top_action, action_rows, action_baseline_rows, action_summary, filter_summary = (
+            _daily_action_filter_cached_plan_for_current_state(
+                cached_plan,
+                rows,
+                available_batters,
+            )
+        )
+
+        if st.session_state.pop(f"{action_cache_key}_quick_refreshed", False):
+            if filter_summary["removed_count"]:
+                st.info(
+                    "Quick Refresh filtered "
+                    f"{filter_summary['removed_count']} stale cached Daily Action recommendation(s) "
+                    "and promoted the next viable cached recommendation."
+                )
+            else:
+                st.caption("Quick Refresh checked the cached Daily Action Plan; no stale recommendations were found.")
+
+        if filter_summary["removed_count"] and not top_action:
+            st.warning(
+                "Quick Refresh removed stale cached Daily Action recommendation(s), "
+                "but no viable cached recommendation remains. Run Daily Refresh to rebuild the plan."
+            )
 
         st.caption(
             " | ".join(
