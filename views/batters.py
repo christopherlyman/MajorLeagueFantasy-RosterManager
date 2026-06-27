@@ -2791,12 +2791,21 @@ def _daily_action_plan_cache_key(ctx_obj: dict) -> str:
 
 def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
     refresh_label = st.session_state.pop("last_successful_refresh_label_for_post_rerun", None)
-    if refresh_label != "Daily Refresh":
+    if not refresh_label:
         return
 
     action_cache_key = _daily_action_plan_cache_key(ctx_obj)
-    with st.spinner("Building Daily Action Plan from Daily Refresh..."):
-        st.session_state[action_cache_key] = build_batter_daily_action_plan_preview(ctx_obj)
+
+    if refresh_label == "Daily Refresh":
+        with st.spinner("Building Daily Action Plan from Daily Refresh..."):
+            st.session_state[action_cache_key] = build_batter_daily_action_plan_preview(ctx_obj)
+        return
+
+    if refresh_label == "Quick Refresh":
+        st.session_state.pop(action_cache_key, None)
+        st.session_state[f"{action_cache_key}_stale_reason"] = (
+            "Quick Refresh updated roster/FA data. Run Daily Refresh to rebuild the Daily Action Plan."
+        )
 
 
 _consume_daily_refresh_action_plan_build(ctx)
@@ -2858,7 +2867,11 @@ with tab_recommendations:
     action_cache_key = _daily_action_plan_cache_key(ctx)
 
     if action_cache_key not in st.session_state:
-        st.info("Run Daily Refresh to build today's Daily Action Plan.")
+        stale_reason = st.session_state.pop(f"{action_cache_key}_stale_reason", None)
+        if stale_reason:
+            st.warning(stale_reason)
+        else:
+            st.info("Run Daily Refresh to build today's Daily Action Plan.")
     else:
         top_action, action_rows, action_baseline_rows, action_summary = st.session_state[action_cache_key]
 
