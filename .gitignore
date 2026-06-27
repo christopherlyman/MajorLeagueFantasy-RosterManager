@@ -49,3 +49,7 @@ instances/*/status/**
 !instances/*/data/derived/.gitkeep
 !instances/*/logs/.gitkeep
 !instances/*/status/.gitkeep
+
+# Local model testing files
+modelTesting/
+!modelTesting/
