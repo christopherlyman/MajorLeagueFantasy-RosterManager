@@ -52,4 +52,4 @@ instances/*/status/**
 
 # Local model testing files
 modelTesting/
-!modelTesting/
+\!modelTesting/
