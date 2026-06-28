@@ -78,7 +78,7 @@ BATTER_LINEUP_COLUMN_CONFIG = {
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
     "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
     "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
-    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Form", format="%.1f"),
     "Start": st.column_config.NumberColumn("Start", format="%.1f"),
     "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
     "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
@@ -100,7 +100,7 @@ BATTER_SLOT_COLUMN_CONFIG = {
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
     "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
     "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
-    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Form", format="%.1f"),
     "Start": st.column_config.NumberColumn("Start", format="%.1f"),
     "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
     "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
@@ -120,7 +120,7 @@ BATTER_FA_COLUMN_CONFIG = {
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
     "H/A": st.column_config.NumberColumn("H/A", format="%.1f"),
     "D/N": st.column_config.NumberColumn("D/N", format="%.1f"),
-    "Recent": st.column_config.NumberColumn("Recent", format="%.1f"),
+    "Recent": st.column_config.NumberColumn("Form", format="%.1f"),
     "Start": st.column_config.NumberColumn("Start", format="%.1f"),
     "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
     "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
@@ -1039,6 +1039,20 @@ def _start_modifier_value(row: dict):
     return _round_modifier(row.get("start_frequency_points"))
 
 
+def _modifier_value(value) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _form_modifier_points(row: dict) -> float:
+    return (
+        _modifier_value(row.get("recent_form_points"))
+        + _modifier_value(row.get("rank_reliability_points"))
+    )
+
+
 def _modifier_cells(row: dict) -> dict:
     row = row or {}
     return {
@@ -1047,7 +1061,7 @@ def _modifier_cells(row: dict) -> dict:
         "Hand": _round_modifier(row.get("handedness_points")),
         "H/A": _round_modifier(row.get("home_away_points")),
         "D/N": _round_modifier(row.get("day_night_points")),
-        "Recent": _round_modifier(row.get("recent_form_points")),
+        "Recent": _round_modifier(_form_modifier_points(row)),
         "Start": _start_modifier_value(row),
         "H2H": _round_modifier(row.get("h2h_matchup_points")),
         "LineupMod": _round_modifier(row.get("lineup_points")),

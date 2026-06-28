@@ -624,8 +624,11 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
         # keep player/day components once; combine game-context by mean
         baseline_points = _mean_component(group, "baseline_points")
         recent_form_points = _mean_component(group, "recent_form_points")
+        rank_reliability_points = _mean_component(group, "rank_reliability_points")
         status_risk_points = _mean_component(group, "status_risk_points")
         lineup_points = min(float(r.get("lineup_points") or 0.0) for r in group) if group else 0.0
+        start_frequency_points = _mean_component(group, "start_frequency_points")
+        h2h_matchup_points = _mean_component(group, "h2h_matchup_points")
 
         pitcher_points = _mean_component(group, "pitcher_points")
         handedness_points = _mean_component(group, "handedness_points")
@@ -652,8 +655,11 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
                 + home_away_points
                 + day_night_points
                 + recent_form_points
+                + rank_reliability_points
                 + status_risk_points
                 + lineup_points
+                + start_frequency_points
+                + h2h_matchup_points
             )
             raw = max(MIN_RANKING, min(MAX_RANKING, raw))
             ranking = int(round(raw))
@@ -664,8 +670,12 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
         base["home_away_points"] = round(home_away_points, 2)
         base["day_night_points"] = round(day_night_points, 2)
         base["recent_form_points"] = round(recent_form_points, 2)
+        base["rank_reliability_points"] = round(rank_reliability_points, 2)
         base["status_risk_points"] = round(status_risk_points, 2)
         base["lineup_points"] = round(lineup_points, 2)
+        base["start_frequency_points"] = round(start_frequency_points, 2)
+        base["h2h_matchup_points"] = round(h2h_matchup_points, 2)
+        base["h2h_pressure_points"] = round(h2h_matchup_points, 2)
         base["ranking"] = ranking
         base["ranking_band"] = ranking_band(raw)
         base["start_worthy"] = raw >= START_WORTHY_THRESHOLD
@@ -686,6 +696,9 @@ def _collapse_scored_player_day_rows(rows: list[dict]) -> list[dict]:
                     f"Home/Away {home_away_points:+.1f}",
                     f"Day/Night {day_night_points:+.1f}",
                     f"Recent {recent_form_points:+.1f}",
+                    f"Reliability {rank_reliability_points:+.1f}",
+                    f"Start% {start_frequency_points:+.1f}",
+                    f"H2H {h2h_matchup_points:+.1f}",
                     f"Status {status_risk_points:+.1f}",
                     f"Lineup {lineup_points:+.1f}",
                 ]

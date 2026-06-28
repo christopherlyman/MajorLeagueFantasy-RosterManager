@@ -8,7 +8,13 @@ MAX_RANKING = 100.0
 HAND_MAX_POINTS = 2.5
 HOME_AWAY_MAX_POINTS = 1.5
 DAY_NIGHT_MAX_POINTS = 1.0
-RECENT_FORM_MAX_POINTS = 5.0
+RECENT_FORM_MAX_POINTS = 3.0
+PITCHER_SAMPLE_CAP_LOW_PA = 70.0
+PITCHER_SAMPLE_CAP_MEDIUM_PA = 170.0
+PITCHER_SAMPLE_CAP_HIGH_PA = 300.0
+PITCHER_SAMPLE_CAP_LOW_POINTS = 3.0
+PITCHER_SAMPLE_CAP_MEDIUM_POINTS = 5.0
+PITCHER_SAMPLE_CAP_HIGH_POINTS = 8.0
 
 LEAGUE7_R_BASELINE = 3.526851851851852
 LEAGUE7_HR_BASELINE = 0.9990740740740741
@@ -20,6 +26,8 @@ LEAGUE_AVG_BASELINE = 0.2547142857142857
 HAND_SMALL_EDGE = 0.030
 HAND_CLEAR_EDGE = 0.060
 HAND_OPS_GAP_SCALE = 25.0
+HAND_STARTER_OPS_BASELINE = 0.740
+HAND_STARTER_OPS_MAX_POINTS = 6.0
 HAND_OPS_GAP_MAX_POINTS = 12.0
 
 HOME_AWAY_SMALL_EDGE = 0.025
@@ -147,6 +155,23 @@ def compute_baseline_points(row: Mapping[str, Any]) -> float:
     return round(_clamp(points, -10.0, 15.0), 2)
 
 
+
+def _pitcher_sample_points_cap(pa: float) -> float:
+    """Cap pitcher matchup impact by pitcher sample size.
+
+    This preserves meaningful ace/weak-pitcher effects when there is enough
+    evidence, while preventing tiny pitcher samples from producing ace-level
+    hitter penalties.
+    """
+    if pa < PITCHER_SAMPLE_CAP_LOW_PA:
+        return PITCHER_SAMPLE_CAP_LOW_POINTS
+    if pa < PITCHER_SAMPLE_CAP_MEDIUM_PA:
+        return PITCHER_SAMPLE_CAP_MEDIUM_POINTS
+    if pa < PITCHER_SAMPLE_CAP_HIGH_PA:
+        return PITCHER_SAMPLE_CAP_HIGH_POINTS
+    return 12.0
+
+
 def compute_pitcher_points(row: Mapping[str, Any]) -> float:
     est_woba_allowed = _num(row.get("pitcher_est_woba_allowed"))
     xera = _num(row.get("pitcher_xera"))
@@ -158,8 +183,8 @@ def compute_pitcher_points(row: Mapping[str, Any]) -> float:
 
     raw = ((est_woba_allowed - 0.320) * 100.0 * 1.0) + ((xera - 4.00) * 1.0)
     points = raw * (0.4 + 0.6 * rel)
-    return round(_clamp(points, -12.0, 8.0), 2)
-
+    sample_cap = _pitcher_sample_points_cap(pa)
+    return round(_clamp(points, -sample_cap, min(8.0, sample_cap)), 2)
 
 def _context_split_points(
     active_ops: Any,
@@ -209,17 +234,28 @@ def _hand_ops_gap_confidence(split_ab: Any) -> float:
     return 1.00
 
 
-def _hand_ops_gap_points(active_ops: Any, overall_ops: Any, split_ab: Any) -> float:
-    active = _num(active_ops)
-    overall = _num(overall_ops)
 
-    if active <= 0.0 or overall <= 0.0:
+def _hand_ops_gap_points(split_ops: Any, overall_ops: Any, split_ab: Any) -> float:
+    """Score handedness using split OPS versus a fantasy-starter OPS baseline.
+
+    This avoids penalizing elite hitters merely because their weaker side is
+    lower than their own elite overall line. For lineup choice, the question is
+    whether today's split is strong relative to startable fantasy hitters.
+    """
+    split = _num(split_ops)
+    ab = _num(split_ab)
+
+    if split <= 0.0 or ab <= 0.0:
         return 0.0
 
-    confidence = _hand_ops_gap_confidence(split_ab)
-    points = (active - overall) * HAND_OPS_GAP_SCALE * confidence
-    return round(_clamp(points, -HAND_OPS_GAP_MAX_POINTS, HAND_OPS_GAP_MAX_POINTS), 2)
+    rel = _reliability_from_ab(ab, 150.0)
+    gap = split - HAND_STARTER_OPS_BASELINE
 
+    if abs(gap) < HAND_SMALL_EDGE:
+        return 0.0
+
+    points = gap * HAND_OPS_GAP_SCALE * (0.5 + 0.5 * rel)
+    return round(_clamp(points, -HAND_STARTER_OPS_MAX_POINTS, HAND_STARTER_OPS_MAX_POINTS), 2)
 
 def compute_handedness_points(row: Mapping[str, Any]) -> float:
     throws = str(row.get("opp_pitcher_throws") or "").strip().upper()
@@ -326,7 +362,7 @@ def compute_recent_form_points(row: Mapping[str, Any]) -> float:
         return 0.0
 
     recent_raw = sum(scores) / len(scores)
-    points = 5.0 * recent_raw
+    points = RECENT_FORM_MAX_POINTS * recent_raw
     return round(_clamp(points, -RECENT_FORM_MAX_POINTS, RECENT_FORM_MAX_POINTS), 2)
 
 
@@ -344,9 +380,9 @@ def compute_lineup_points(row: Mapping[str, Any]) -> float:
     return 0.0
 
 
-def compute_rank_reliability_points(row: Mapping[str, Any]) -> float:
-    return round(_clamp(_num(row.get("rank_reliability_points")), 0.0, 8.0), 2)
 
+def compute_rank_reliability_points(row: Mapping[str, Any]) -> float:
+    return round(_clamp(_num(row.get("rank_reliability_points")) * 2.0, 0.0, 16.0), 2)
 
 def compute_usual_suspects_batter_ranking(row: Mapping[str, Any]) -> dict[str, Any]:
     override = _status_override(str(row.get("status_display") or row.get("status") or ""))
