@@ -1,4 +1,5 @@
 import json
+import html
 import os
 import re
 import subprocess
@@ -129,6 +130,7 @@ def load_refresh_telemetry():
                 "message": str(data.get("message") or ""),
                 "as_of_date": str(data.get("as_of_date") or ""),
                 "elapsed_s": _status_elapsed_seconds(data),
+                "current_stage": str(data.get("current_stage") or ""),
             }
         )
 
@@ -148,7 +150,78 @@ def load_refresh_telemetry():
     for mode, vals in buckets.items():
         averages[mode] = round(mean(vals[:8])) if vals else None
 
-    return {"last_refresh": last_refresh, "averages": averages}
+    return {"last_refresh": last_refresh, "status_rows": status_rows, "averages": averages}
+
+
+def _is_yahoo_api_blocked_status(row: dict) -> bool:
+    if row.get("success"):
+        return False
+
+    haystack = " ".join(
+        [
+            str(row.get("current_stage") or ""),
+            str(row.get("message") or ""),
+        ]
+    ).lower()
+
+    return (
+        "yahoo" in haystack
+        or "403" in haystack
+        or "not authorized" in haystack
+        or "application is not authorized" in haystack
+    )
+
+
+def _derive_yahoo_api_badge(telemetry: dict, active_date: str) -> tuple[str, str, str]:
+    rows = telemetry.get("status_rows") or []
+    active_date = str(active_date or "")
+
+    if rows:
+        latest = rows[0]
+        recent_rows = rows[:2]
+
+        if _is_yahoo_api_blocked_status(latest) or any(
+            _is_yahoo_api_blocked_status(row) for row in recent_rows
+        ):
+            return (
+                "Blocked",
+                "#c62828",
+                "Yahoo Fantasy API rejected the app/token. Yahoo-dependent data may be stale.",
+            )
+
+        if latest.get("success") and str(latest.get("as_of_date") or "") == active_date:
+            return (
+                "OK",
+                "#2e7d32",
+                "Yahoo-dependent refresh completed for the active date.",
+            )
+
+    return (
+        "Stale",
+        "#f9ab00",
+        "Yahoo API status is not current for the active date.",
+    )
+
+
+def render_yahoo_api_badge(telemetry: dict, active_date: str) -> None:
+    label, color, help_text = _derive_yahoo_api_badge(telemetry, active_date)
+
+    st.caption("Yahoo API:")
+    st.markdown(
+        (
+            '<div title="{help_text}" '
+            'style="display:flex;align-items:center;gap:0.4rem;margin-top:-0.35rem;margin-bottom:0.35rem;">'
+            '<span style="display:inline-block;width:0.7rem;height:0.7rem;'
+            'border-radius:50%;background:{color};"></span>'
+            '<span style="font-weight:600;">{label}</span>'
+            '</div>'
+        ).format(
+            help_text=html.escape(help_text, quote=True),
+            color=color,
+            label=html.escape(label),
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -172,6 +245,7 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
     st.header("Refresh")
 
     telemetry = load_refresh_telemetry()
+    render_yahoo_api_badge(telemetry, ctx.get("as_of_date", ""))
     st.caption(f"Active date: {ctx['as_of_date']}")
 
     last_refresh = telemetry.get("last_refresh")
