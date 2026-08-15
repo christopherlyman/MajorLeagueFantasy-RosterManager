@@ -400,6 +400,113 @@ def _fetch_players_with_bisect(
 # Yahoo call
 # ----------------------------
 
+def _env_int_local(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, default)).strip())
+    except Exception:
+        return default
+
+
+def _env_float_local(name: str, default: float) -> float:
+    try:
+        return float(str(os.environ.get(name, default)).strip())
+    except Exception:
+        return default
+
+
+def _response_body_snippet(resp, limit: int = 500) -> str:
+    if resp is None:
+        return ""
+    return " ".join((getattr(resp, "text", "") or "").strip().split())[:limit]
+
+
+def _is_yahoo_request_denied(resp, body: str) -> bool:
+    status_code = getattr(resp, "status_code", None)
+    lowered = (body or "").lower()
+    return status_code == 999 or "request denied" in lowered
+
+
+def _is_retryable_yahoo_response(resp, body: str) -> bool:
+    status_code = getattr(resp, "status_code", None)
+    return (
+        _is_yahoo_request_denied(resp, body)
+        or status_code in {429, 500, 502, 503, 504}
+    )
+
+
+def _request_yahoo_json(url: str, headers: dict, timeout: int = 45, label: str = "YAHOO") -> dict:
+    max_attempts = max(1, _env_int_local("YAHOO_REQUEST_MAX_ATTEMPTS", 4))
+    base_sleep = max(0.0, _env_float_local("YAHOO_REQUEST_BACKOFF_SECONDS", 20.0))
+
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        resp = None
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            if attempt < max_attempts:
+                sleep_seconds = base_sleep * attempt
+                print(
+                    f"WARN yahoo_request_exception_retry label={label} "
+                    f"attempt={attempt}/{max_attempts} error={type(exc).__name__} "
+                    f"sleep_seconds={sleep_seconds}",
+                    flush=True,
+                )
+                time.sleep(sleep_seconds)
+                continue
+            raise
+
+        body = _response_body_snippet(resp)
+
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_attempts:
+                    sleep_seconds = base_sleep * attempt
+                    print(
+                        f"WARN yahoo_non_json_retry label={label} "
+                        f"attempt={attempt}/{max_attempts} status_code={resp.status_code} "
+                        f"error={type(exc).__name__} body={body} "
+                        f"sleep_seconds={sleep_seconds}",
+                        flush=True,
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+
+                raise RuntimeError(
+                    f"Yahoo non-JSON response after retries: label={label} "
+                    f"status_code={resp.status_code} error={type(exc).__name__} body={body}"
+                ) from exc
+
+        if resp.status_code == 400:
+            resp.raise_for_status()
+
+        if _is_retryable_yahoo_response(resp, body):
+            if attempt < max_attempts:
+                sleep_seconds = base_sleep * attempt
+                print(
+                    f"WARN yahoo_retryable_response label={label} "
+                    f"attempt={attempt}/{max_attempts} status_code={resp.status_code} "
+                    f"body={body} sleep_seconds={sleep_seconds}",
+                    flush=True,
+                )
+                time.sleep(sleep_seconds)
+                continue
+
+            raise RuntimeError(
+                f"Yahoo retryable response failed after retries: label={label} "
+                f"status_code={resp.status_code} body={body}"
+            )
+
+        resp.raise_for_status()
+
+    raise RuntimeError(f"Yahoo request failed after retries: label={label} error={last_error!r}")
+
+
 def fetch_league_players_stats(league_key: str, player_keys: list[str], season_year: int, token: str):
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -409,9 +516,12 @@ def fetch_league_players_stats(league_key: str, player_keys: list[str], season_y
         f"/stats;type=season;season={season_year}?format=json"
     )
 
-    r = requests.get(url, headers=headers, timeout=45)
-    r.raise_for_status()
-    return r.json()
+    return _request_yahoo_json(
+        url,
+        headers=headers,
+        timeout=45,
+        label=f"STATS players={len(player_keys)}",
+    )
 
 
 def fetch_league_players_meta(league_key: str, player_keys: list[str], token: str):
@@ -422,9 +532,12 @@ def fetch_league_players_meta(league_key: str, player_keys: list[str], token: st
         f";out=percent_owned;out=ranks;out=draft_analysis"
         f"?format=json"
     )
-    r = requests.get(url, headers=headers, timeout=45)
-    r.raise_for_status()
-    return r.json()
+    return _request_yahoo_json(
+        url,
+        headers=headers,
+        timeout=45,
+        label=f"META players={len(player_keys)}",
+    )
 
 
 # ----------------------------
