@@ -1703,9 +1703,9 @@ def _usual_cap_projection_values(ctx: dict, summary: list[dict]) -> dict[str, di
             # Project raw pitcher IP pace. Yahoo's pitcher cap projection appears
             # to exclude the All-Star break from elapsed pace days. Do not cap to
             # max here; the sidebar diff should show projected over/under limit.
-            all_star_break_days = 5
-            adjusted_elapsed = max(1, elapsed - all_star_break_days)
-            adjusted_total = max(1, total - all_star_break_days)
+            all_star_break_days = 4.9
+            adjusted_elapsed = max(1.0, elapsed - all_star_break_days)
+            adjusted_total = max(1.0, total - all_star_break_days)
             projected = max(0.0, used / adjusted_elapsed * adjusted_total)
         elif slot in {"C", "1B", "2B", "3B", "SS", "IF", "UTIL", "OF"}:
             # Best observed Yahoo-style hitter cap model:
