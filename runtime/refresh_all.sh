@@ -215,7 +215,13 @@ echo "COPIED $HOST_DERIVED_ROOT/recent7_hitter_inputs_${TODAY}.csv"
 
 
 stage "REFRESH ALL: USUAL DAILY CAP USAGE"
-docker exec -i "$APP_CONTAINER" bash -lc "cd /app && PYTHONPATH=/app python scripts/yahoo/refresh_usual_daily_cap_usage.py"
+docker exec -i \
+  -e USUAL_CAP_BACKFILL_AS_OF_DATE="$TODAY" \
+  -e SEASON_YEAR="${TODAY:0:4}" \
+  -e USUAL_CAP_BACKFILL_SLEEP_SECONDS="${USUAL_CAP_BACKFILL_SLEEP_SECONDS:-20}" \
+  -e USUAL_CAP_BACKFILL_MAX_DATES="${USUAL_CAP_BACKFILL_MAX_DATES:-31}" \
+  "$APP_CONTAINER" \
+  bash -lc "cd /app && PYTHONPATH=/app python scripts/yahoo/backfill_usual_daily_cap_usage.py"
 
 stage "REFRESH ALL: SPLITS PIPELINE"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
