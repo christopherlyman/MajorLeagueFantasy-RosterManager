@@ -49,6 +49,29 @@ def _load_name_normalizer():
 normalize_name = _load_name_normalizer()
 
 
+def _savant_name_key(value: str) -> str:
+    """
+    Name key used only for Baseball Savant CSV matching.
+
+    Keeps the app-wide normalizer unchanged while handling common Yahoo/Savant
+    display differences:
+      - Shohei Ohtani (Batter) -> Shohei Ohtani
+      - T.J. Rumfield / T J Rumfield -> TJ Rumfield
+    """
+    text = str(value or "").strip()
+
+    # Yahoo can add role suffixes for special cases.
+    text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+
+    key = normalize_name(text)
+
+    # The shared normalizer can turn T.J. into "t j"; Savant can be "TJ".
+    # Collapse only leading two single-letter initials before the surname.
+    key = re.sub(r"\b([a-z])\s+([a-z])(?=\s)", r"\1\2", key)
+
+    return key
+
+
 def _today_ny() -> str:
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
@@ -460,7 +483,7 @@ def _load_savant_map(kind: str, year: int) -> dict[str, dict]:
         full_name = _last_first_to_full_name(row.get("last_name, first_name", ""))
         if not full_name:
             continue
-        out[normalize_name(full_name)] = row
+        out[_savant_name_key(full_name)] = row
     return out
 
 
@@ -878,8 +901,8 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
             r["game_daypart"] = ""
             r["game_started"] = False
 
-        hitter_row = hitter_savant.get(normalize_name(r.get("player_name", "")), {})
-        pitcher_row = pitcher_savant.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
+        hitter_row = hitter_savant.get(_savant_name_key(r.get("player_name", "")), {})
+        pitcher_row = pitcher_savant.get(_savant_name_key(r.get("opposing_probable_pitcher", "")), {})
         hand_row = pitcher_hand_map.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
         split_row = hitter_split_map.get(normalize_name(r.get("player_name", "")), {})
         recent_row = recent7_map.get(normalize_name(r.get("player_name", "")), {})
@@ -1139,8 +1162,8 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
             r["game_daypart"] = ""
             r["game_started"] = False
 
-        hitter_row = hitter_savant.get(normalize_name(r.get("player_name", "")), {})
-        pitcher_row = pitcher_savant.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
+        hitter_row = hitter_savant.get(_savant_name_key(r.get("player_name", "")), {})
+        pitcher_row = pitcher_savant.get(_savant_name_key(r.get("opposing_probable_pitcher", "")), {})
         hand_row = pitcher_hand_map.get(normalize_name(r.get("opposing_probable_pitcher", "")), {})
         split_row = hitter_split_map.get(normalize_name(r.get("player_name", "")), {})
         recent_row = recent7_map.get(normalize_name(r.get("player_name", "")), {})
