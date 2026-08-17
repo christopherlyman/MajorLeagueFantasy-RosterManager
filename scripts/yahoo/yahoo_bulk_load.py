@@ -507,21 +507,53 @@ def _request_yahoo_json(url: str, headers: dict, timeout: int = 45, label: str =
     raise RuntimeError(f"Yahoo request failed after retries: label={label} error={last_error!r}")
 
 
+def _coerce_players_collection_payload_to_league_shape(payload: dict) -> dict:
+    """
+    Yahoo's /players;player_keys=.../stats endpoint returns fantasy_content.players,
+    while the existing bulk loader extraction path expects fantasy_content.league[1].players.
+
+    Keep the richer endpoint, but normalize its response shape so the existing
+    extractor and batch merger can continue to work.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    fantasy_content = payload.get("fantasy_content")
+    if not isinstance(fantasy_content, dict):
+        return payload
+
+    if "league" in fantasy_content:
+        return payload
+
+    players = fantasy_content.get("players")
+    if not isinstance(players, dict):
+        return payload
+
+    coerced_fantasy_content = dict(fantasy_content)
+    coerced_fantasy_content["league"] = [None, {"players": players}]
+
+    coerced_payload = dict(payload)
+    coerced_payload["fantasy_content"] = coerced_fantasy_content
+    return coerced_payload
+
+
 def fetch_league_players_stats(league_key: str, player_keys: list[str], season_year: int, token: str):
     headers = {"Authorization": f"Bearer {token}"}
 
     url = (
-        f"{YAHOO_FANTASY_BASE}/league/{league_key}/players;"
+        f"{YAHOO_FANTASY_BASE}/players;"
         f"player_keys={safe_player_keys(player_keys)}"
         f"/stats;type=season;season={season_year}?format=json"
     )
 
-    return _request_yahoo_json(
+    payload = _request_yahoo_json(
         url,
         headers=headers,
         timeout=45,
         label=f"STATS players={len(player_keys)}",
     )
+
+    return _coerce_players_collection_payload_to_league_shape(payload)
 
 
 def fetch_league_players_meta(league_key: str, player_keys: list[str], token: str):
@@ -732,7 +764,7 @@ def main():
             blocks = extract_player_blocks(payload)
 
             stat_rows = 0
-            allowed = {3, 7, 12, 13, 16, 18, 21, 60, 26, 27, 28, 32, 42, 48, 49, 50, 83, 89}
+            allowed = {3, 4, 5, 7, 10, 11, 12, 13, 15, 16, 18, 19, 20, 21, 23, 55, 60, 26, 27, 28, 32, 42, 48, 49, 50, 83, 89}
 
             for block in blocks:
                 pkey = find_player_key(block)
