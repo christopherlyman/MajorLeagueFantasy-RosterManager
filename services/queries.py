@@ -787,6 +787,133 @@ def _game_display(opponent_team: str, is_home, game_time_et: str) -> str:
     return game_time_et
 
 
+
+_YAHOO_BATTER_SEASON_STAT_IDS = {
+    3: "avg",
+    4: "obp",
+    5: "slg",
+    6: "ab",
+    7: "r",
+    8: "h",
+    10: "2b",
+    11: "3b",
+    12: "hr",
+    13: "rbi",
+    15: "sf",
+    16: "sb",
+    18: "bb",
+    19: "ibb",
+    20: "hbp",
+    21: "k",
+    23: "tb",
+    55: "ops",
+    60: "hab",
+}
+
+
+def _to_float_or_none(value):
+    try:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text in ("", "-", "-/-"):
+            return None
+        return float(text)
+    except Exception:
+        return None
+
+
+def _parse_yahoo_hab(value):
+    text = str(value or "").strip()
+    if "/" not in text:
+        return None, None
+
+    hits_text, ab_text = text.split("/", 1)
+
+    try:
+        hits = int(float(hits_text))
+        at_bats = int(float(ab_text))
+    except Exception:
+        return None, None
+
+    return hits, at_bats
+
+
+def _load_yahoo_batter_season_stat_map(league_key: str, season_year: int, yahoo_player_keys: list[str]) -> dict:
+    keys = sorted({str(k or "").strip() for k in yahoo_player_keys if str(k or "").strip()})
+    if not keys:
+        return {}
+
+    stat_ids = sorted(_YAHOO_BATTER_SEASON_STAT_IDS.keys())
+
+    conn = get_connection()
+    out: dict[str, dict] = {k: {} for k in keys}
+
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT yahoo_player_key, stat_id, value_raw, value_num
+                FROM public.yahoo_player_league_season_stat
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = ANY(%s)
+                  AND stat_id = ANY(%s)
+                """,
+                (league_key, season_year, keys, stat_ids),
+            )
+
+            for yahoo_player_key, stat_id, value_raw, value_num in cur.fetchall():
+                pkey = str(yahoo_player_key or "").strip()
+                label = _YAHOO_BATTER_SEASON_STAT_IDS.get(int(stat_id))
+                if not pkey or not label:
+                    continue
+
+                if int(stat_id) == 60:
+                    out.setdefault(pkey, {})["hab"] = value_raw
+                    continue
+
+                numeric_value = _to_float_or_none(value_num)
+                if numeric_value is None:
+                    numeric_value = _to_float_or_none(value_raw)
+
+                out.setdefault(pkey, {})[label] = numeric_value
+                out.setdefault(pkey, {})[f"{label}_raw"] = value_raw
+
+    return out
+
+
+def _attach_yahoo_batter_season_stats(rows: list[dict], league_key: str, as_of_date: str) -> None:
+    if not rows:
+        return
+
+    try:
+        season_year = int(str(as_of_date)[:4])
+    except Exception:
+        return
+
+    keys = [
+        str(row.get("yahoo_player_key") or "").strip()
+        for row in rows
+        if str(row.get("yahoo_player_key") or "").strip()
+    ]
+
+    stat_map = _load_yahoo_batter_season_stat_map(league_key, season_year, keys)
+
+    for row in rows:
+        pkey = str(row.get("yahoo_player_key") or "").strip()
+        stats = stat_map.get(pkey, {})
+
+        row["hitter_yahoo_season_year"] = season_year
+        row["hitter_yahoo_stat_source"] = "yahoo_current_season" if stats else ""
+
+        for field in [
+            "avg", "obp", "slg", "ops",
+            "h", "ab", "r", "2b", "3b", "hr", "rbi", "sb",
+            "bb", "ibb", "hbp", "sf", "k", "tb", "hab",
+        ]:
+            row[f"hitter_yahoo_{field}"] = stats.get(field, "")
+
 def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
     sql = """
     WITH games AS (
@@ -963,6 +1090,7 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
 
     rows = _collapse_scored_player_day_rows(rows)
     rows.sort(key=lambda r: (r["_slot_sort"], r["player_name"]))
+    _attach_yahoo_batter_season_stats(rows, league_key, as_of_date)
     return rows
 
 
@@ -1225,6 +1353,7 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
 
     rows = _collapse_scored_player_day_rows(rows)
     rows.sort(key=lambda r: (-int(r.get("ranking", 0)), str(r.get("player_name", ""))))
+    _attach_yahoo_batter_season_stats(rows, league_key, as_of_date)
     return rows
 
 def fetch_remaining_starts_by_slot(league_key: str, team_key: str, as_of_date: str) -> dict[str, int]:

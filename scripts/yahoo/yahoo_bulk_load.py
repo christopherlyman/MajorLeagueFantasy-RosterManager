@@ -764,7 +764,7 @@ def main():
             blocks = extract_player_blocks(payload)
 
             stat_rows = 0
-            allowed = {3, 4, 5, 7, 10, 11, 12, 13, 15, 16, 18, 19, 20, 21, 23, 55, 60, 26, 27, 28, 32, 42, 48, 49, 50, 83, 89}
+            allowed = {3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 20, 21, 23, 55, 60, 26, 27, 28, 32, 42, 48, 49, 50, 83, 89}
 
             for block in blocks:
                 pkey = find_player_key(block)
