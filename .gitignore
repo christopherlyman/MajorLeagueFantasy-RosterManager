@@ -53,3 +53,5 @@ instances/*/status/**
 # Local model testing files
 modelTesting/
 \!modelTesting/
+runtime/config/
+instances/*/config/
