@@ -24,6 +24,95 @@ REFRESH_LABELS = {
 }
 
 
+NIGHTLY_YAHOO_CONFIG_FILENAME = "nightly_yahoo_season_stats.enabled"
+NIGHTLY_YAHOO_STATUS_FILENAME = "nightly_yahoo_season_stats_status.json"
+
+
+def _nightly_yahoo_config_dir() -> Path:
+    explicit = os.getenv("RMT_CONFIG_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+
+    return STATUS_DIR.parent / "config"
+
+
+def _nightly_yahoo_enabled_path() -> Path:
+    return _nightly_yahoo_config_dir() / NIGHTLY_YAHOO_CONFIG_FILENAME
+
+
+def _nightly_yahoo_status_path() -> Path:
+    return STATUS_DIR / NIGHTLY_YAHOO_STATUS_FILENAME
+
+
+def load_nightly_yahoo_enabled() -> bool:
+    path = _nightly_yahoo_enabled_path()
+    if not path.exists():
+        return False
+
+    try:
+        value = path.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        return False
+
+    return value in {"1", "true", "yes", "on", "enabled"}
+
+
+def set_nightly_yahoo_enabled(enabled: bool) -> None:
+    path = _nightly_yahoo_enabled_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("enabled\n" if enabled else "disabled\n", encoding="utf-8")
+
+
+def load_nightly_yahoo_status() -> dict:
+    return _load_json(_nightly_yahoo_status_path())
+
+
+def render_nightly_yahoo_controls() -> None:
+    app_alias = os.getenv("APP_ALIAS", "unknown")
+    enabled = load_nightly_yahoo_enabled()
+    status = load_nightly_yahoo_status()
+
+    st.caption(
+        "Nightly Yahoo season stats: "
+        + ("ON" if enabled else "OFF")
+        + f" | Instance: {app_alias}"
+    )
+
+    if status:
+        icon = "✅" if status.get("success") else "❌"
+        skipped = " skipped" if status.get("skipped") else ""
+        elapsed = _format_seconds(status.get("elapsed_s"))
+        st.caption(
+            f"Nightly last: {icon}{skipped} | "
+            f"{status.get('as_of_date', '')} | "
+            f"{elapsed} | "
+            f"{status.get('message', '')}"
+        )
+
+    col_on, col_off = st.columns(2)
+    if col_on.button(
+        "Turn ON Nightly Yahoo",
+        type="secondary",
+        use_container_width=True,
+        disabled=enabled,
+        key=f"nightly_yahoo_on_{app_alias}",
+    ):
+        set_nightly_yahoo_enabled(True)
+        st.success("Nightly Yahoo season stats enabled for this RMT instance.")
+        st.rerun()
+
+    if col_off.button(
+        "Turn OFF Nightly Yahoo",
+        type="secondary",
+        use_container_width=True,
+        disabled=not enabled,
+        key=f"nightly_yahoo_off_{app_alias}",
+    ):
+        set_nightly_yahoo_enabled(False)
+        st.success("Nightly Yahoo season stats disabled for this RMT instance.")
+        st.rerun()
+
+
 def build_refresh_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
 
@@ -150,7 +239,13 @@ def load_refresh_telemetry():
     for mode, vals in buckets.items():
         averages[mode] = round(mean(vals[:8])) if vals else None
 
-    return {"last_refresh": last_refresh, "status_rows": status_rows, "averages": averages}
+    nightly_yahoo_status = _load_json(STATUS_DIR / NIGHTLY_YAHOO_STATUS_FILENAME)
+    return {
+        "last_refresh": last_refresh,
+        "status_rows": status_rows,
+        "averages": averages,
+        "nightly_yahoo_status": nightly_yahoo_status,
+    }
 
 
 def _is_yahoo_api_blocked_status(row: dict) -> bool:
@@ -195,6 +290,18 @@ def _derive_yahoo_api_badge(telemetry: dict, active_date: str) -> tuple[str, str
                 "#2e7d32",
                 "Yahoo-dependent refresh completed for the active date.",
             )
+
+    nightly = telemetry.get("nightly_yahoo_status") or {}
+    if (
+        nightly.get("success")
+        and not nightly.get("skipped")
+        and str(nightly.get("as_of_date") or "") == active_date
+    ):
+        return (
+            "OK",
+            "#2e7d32",
+            "Nightly Yahoo season stats completed for the active date.",
+        )
 
     return (
         "Stale",
