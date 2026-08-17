@@ -89,27 +89,22 @@ def render_nightly_yahoo_controls() -> None:
             f"{status.get('message', '')}"
         )
 
-    col_on, col_off = st.columns(2)
-    if col_on.button(
-        "Turn ON Nightly Yahoo",
-        type="secondary",
-        use_container_width=True,
-        disabled=enabled,
-        key=f"nightly_yahoo_on_{app_alias}",
-    ):
-        set_nightly_yahoo_enabled(True)
-        st.success("Nightly Yahoo season stats enabled for this RMT instance.")
-        st.rerun()
+    toggle_value = st.toggle(
+        "Enable nightly Yahoo season stats",
+        value=enabled,
+        key=f"nightly_yahoo_enabled_toggle_{app_alias}",
+        help=(
+            "When enabled, the 3am host scheduled task will refresh Yahoo player-pool "
+            "metadata and current-season stats for this RMT instance."
+        ),
+    )
 
-    if col_off.button(
-        "Turn OFF Nightly Yahoo",
-        type="secondary",
-        use_container_width=True,
-        disabled=not enabled,
-        key=f"nightly_yahoo_off_{app_alias}",
-    ):
-        set_nightly_yahoo_enabled(False)
-        st.success("Nightly Yahoo season stats disabled for this RMT instance.")
+    if toggle_value != enabled:
+        set_nightly_yahoo_enabled(toggle_value)
+        if toggle_value:
+            st.success("Nightly Yahoo season stats enabled for this RMT instance.")
+        else:
+            st.success("Nightly Yahoo season stats disabled for this RMT instance.")
         st.rerun()
 
 
