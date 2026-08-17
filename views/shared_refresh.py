@@ -396,6 +396,8 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
         "Deep = full + Yahoo historical stats."
     )
 
+    render_nightly_yahoo_controls()
+
     refresh_choice = None
 
     col1, col2 = st.columns(2)
