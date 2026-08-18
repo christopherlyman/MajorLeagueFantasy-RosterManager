@@ -141,17 +141,91 @@ def ranking_band(ranking: float) -> str:
     return "Sit"
 
 
+YAHOO_WOBA_WEIGHTS_2026 = {
+    "bb": 0.699,
+    "hbp": 0.730,
+    "1b": 0.891,
+    "2b": 1.262,
+    "3b": 1.596,
+    "hr": 2.048,
+}
+
+YAHOO_WOBA_FIT_INTERCEPT = 0.092374
+YAHOO_WOBA_FIT_SLOPE = 0.693929
+
+
+def _yahoo_batter_woba(row: Mapping[str, Any]) -> float | None:
+    h = _num(row.get("hitter_yahoo_h"))
+    ab = _num(row.get("hitter_yahoo_ab"))
+    doubles = _num(row.get("hitter_yahoo_2b"))
+    triples = _num(row.get("hitter_yahoo_3b"))
+    hr = _num(row.get("hitter_yahoo_hr"))
+    bb = _num(row.get("hitter_yahoo_bb"))
+    ibb = _num(row.get("hitter_yahoo_ibb"))
+    hbp = _num(row.get("hitter_yahoo_hbp"))
+    sf = _num(row.get("hitter_yahoo_sf"))
+
+    singles = max(0.0, h - doubles - triples - hr)
+    unintentional_bb = max(0.0, bb - ibb)
+    denominator = ab + unintentional_bb + sf + hbp
+
+    if denominator <= 0.0:
+        return None
+
+    numerator = (
+        YAHOO_WOBA_WEIGHTS_2026["bb"] * unintentional_bb
+        + YAHOO_WOBA_WEIGHTS_2026["hbp"] * hbp
+        + YAHOO_WOBA_WEIGHTS_2026["1b"] * singles
+        + YAHOO_WOBA_WEIGHTS_2026["2b"] * doubles
+        + YAHOO_WOBA_WEIGHTS_2026["3b"] * triples
+        + YAHOO_WOBA_WEIGHTS_2026["hr"] * hr
+    )
+    return numerator / denominator
+
+
+def _yahoo_woba_fit_to_xwoba(yahoo_woba: float | None) -> float | None:
+    if yahoo_woba is None or yahoo_woba <= 0.0:
+        return None
+    return YAHOO_WOBA_FIT_INTERCEPT + (YAHOO_WOBA_FIT_SLOPE * yahoo_woba)
+
+
+def _yahoo_woba_stabilizer_points(row: Mapping[str, Any], est_woba: float) -> float:
+    yahoo_woba = _yahoo_batter_woba(row)
+    fitted_xwoba = _yahoo_woba_fit_to_xwoba(yahoo_woba)
+
+    if fitted_xwoba is None or est_woba <= 0.0:
+        return 0.0
+
+    ab = _num(row.get("hitter_yahoo_ab"))
+    ab_confidence = _clamp((ab - 50.0) / 250.0, 0.0, 1.0)
+
+    raw_delta_points = (fitted_xwoba - est_woba) * 100.0 * 1.6
+    stabilizer = raw_delta_points * 0.20 * ab_confidence
+
+    return _clamp(stabilizer, -2.0, 2.0)
+
+
 def compute_baseline_points(row: Mapping[str, Any]) -> float:
     est_woba = _num(row.get("hitter_est_woba"))
-    woba_gap = _num(row.get("hitter_woba_gap"))
     pa = _num(row.get("hitter_pa"))
     rel = _reliability_from_pa(pa)
 
-    if est_woba == 0.0 and woba_gap == 0.0 and pa == 0.0:
+    if est_woba > 0.0:
+        raw = (est_woba - 0.300) * 100.0 * 1.6
+        points = raw * (0.5 + 0.5 * rel)
+        points += _yahoo_woba_stabilizer_points(row, est_woba)
+        return round(_clamp(points, -10.0, 15.0), 2)
+
+    yahoo_woba = _yahoo_batter_woba(row)
+    fitted_xwoba = _yahoo_woba_fit_to_xwoba(yahoo_woba)
+    if fitted_xwoba is None:
         return 0.0
 
-    raw = ((est_woba - 0.300) * 100.0 * 1.6) + (woba_gap * 100.0 * 0.6)
-    points = raw * (0.5 + 0.5 * rel)
+    ab = _num(row.get("hitter_yahoo_ab"))
+    yahoo_rel = _clamp(ab / 250.0, 0.0, 1.0)
+    raw = (fitted_xwoba - 0.300) * 100.0 * 1.6
+    points = raw * (0.35 + 0.65 * yahoo_rel)
+
     return round(_clamp(points, -10.0, 15.0), 2)
 
 
