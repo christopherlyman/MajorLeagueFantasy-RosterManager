@@ -199,6 +199,14 @@ run_instance() {
 
   echo "$$" > "$lock_file"
 
+  run_logged_command() {
+    set +e
+    "$@"
+    local cmd_rc=$?
+    set -e
+    return "$cmd_rc"
+  }
+
   local rc=0
   {
     echo "RUN_START ts=$started_at app_alias=$app_alias container=$container_name league_key=$league_key season_year=$season_year as_of_date=$today dry_run=$DRY_RUN"
@@ -208,7 +216,7 @@ run_instance() {
     else
       echo
       echo "STAGE_START stage=refresh_yahoo_player_pool_meta"
-      docker exec -i \
+      if run_logged_command docker exec -i \
         -e YAHOO_LEAGUE_KEY="$league_key" \
         -e SEASON_YEAR="$season_year" \
         -e PLAYER_POOL_REFRESH_MODE="${RMT_NIGHTLY_PLAYER_POOL_REFRESH_MODE:-meta_only}" \
@@ -216,22 +224,40 @@ run_instance() {
         -e YAHOO_REQUEST_MAX_ATTEMPTS="${YAHOO_REQUEST_MAX_ATTEMPTS:-4}" \
         -e YAHOO_REQUEST_BACKOFF_SECONDS="${YAHOO_REQUEST_BACKOFF_SECONDS:-20}" \
         "$container_name" bash -lc 'cd /app/scripts/yahoo && POSTGRES_DSN=${POSTGRES_DSN:-$MLF_POSTGRES_DSN} python yahoo_league_player_pool_load.py'
+      then
+        echo "STAGE_DONE stage=refresh_yahoo_player_pool_meta"
+      else
+        rc=$?
+        echo "STAGE_FAILED stage=refresh_yahoo_player_pool_meta rc=$rc"
+      fi
 
-      echo
-      echo "STAGE_START stage=refresh_yahoo_season_stats_full_universe"
-      docker exec -i \
-        -e YAHOO_LEAGUE_KEY="$league_key" \
-        -e YAHOO_STATS_SEASON="$season_year" \
-        -e YAHOO_GAME_KEY="${YAHOO_GAME_KEY:-469}" \
-        -e YAHOO_BATCH_SIZE="${RMT_NIGHTLY_YAHOO_BATCH_SIZE:-25}" \
-        -e YAHOO_SLEEP_SECONDS="${RMT_NIGHTLY_YAHOO_SLEEP_SECONDS:-0.25}" \
-        -e YAHOO_FETCH_META="${RMT_NIGHTLY_YAHOO_FETCH_META:-false}" \
-        -e YAHOO_WRITE_RAW="${RMT_NIGHTLY_YAHOO_WRITE_RAW:-false}" \
-        "$container_name" bash -lc 'cd /app/scripts/yahoo && POSTGRES_DSN=${POSTGRES_DSN:-$MLF_POSTGRES_DSN} python yahoo_bulk_load.py'
+      if [[ "$rc" -eq 0 ]]; then
+        echo
+        echo "STAGE_START stage=refresh_yahoo_season_stats_full_universe"
+        if run_logged_command docker exec -i \
+          -e YAHOO_LEAGUE_KEY="$league_key" \
+          -e YAHOO_STATS_SEASON="$season_year" \
+          -e YAHOO_GAME_KEY="${YAHOO_GAME_KEY:-469}" \
+          -e YAHOO_BATCH_SIZE="${RMT_NIGHTLY_YAHOO_BATCH_SIZE:-25}" \
+          -e YAHOO_SLEEP_SECONDS="${RMT_NIGHTLY_YAHOO_SLEEP_SECONDS:-1}" \
+          -e YAHOO_FETCH_META="${RMT_NIGHTLY_YAHOO_FETCH_META:-false}" \
+          -e YAHOO_WRITE_RAW="${RMT_NIGHTLY_YAHOO_WRITE_RAW:-false}" \
+          "$container_name" bash -lc 'cd /app/scripts/yahoo && POSTGRES_DSN=${POSTGRES_DSN:-$MLF_POSTGRES_DSN} python yahoo_bulk_load.py'
+        then
+          echo "STAGE_DONE stage=refresh_yahoo_season_stats_full_universe"
+        else
+          rc=$?
+          echo "STAGE_FAILED stage=refresh_yahoo_season_stats_full_universe rc=$rc"
+        fi
+      fi
     fi
 
-    echo "RUN_END ts=$(date -u +%FT%TZ) success=true"
-  } >> "$log_file" 2>&1 || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      echo "RUN_END ts=$(date -u +%FT%TZ) success=true"
+    else
+      echo "RUN_END ts=$(date -u +%FT%TZ) success=false rc=$rc"
+    fi
+  } >> "$log_file" 2>&1
 
   rm -f "$lock_file"
 
