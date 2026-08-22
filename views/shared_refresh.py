@@ -386,9 +386,9 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
 
     st.caption(
         "Quick = roster, games, lineups. "
-        "Daily = quick + league rosters + current scoring artifacts. "
-        "Full = daily + Yahoo player-pool meta. "
-        "Deep = full + Yahoo historical stats."
+        "Recommendations = quick + recommendation inputs/action plan. "
+        "Daily = full daily rebuild. "
+        "Full/Deep = deeper Yahoo maintenance."
     )
 
     render_nightly_yahoo_controls()
@@ -413,6 +413,16 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
         key="refresh_daily_btn",
     ):
         refresh_choice = ("Daily Refresh", "/app/runtime/refresh_daily.sh")
+
+    if st.button(
+        "Recommendations Refresh",
+        type="primary",
+        use_container_width=True,
+        disabled=refresh_running,
+        key="refresh_recommendations_btn",
+        help="Refresh live/date context and recommendation inputs, then rebuild the Daily Action Plan.",
+    ):
+        refresh_choice = ("Recommendations Refresh", "/app/runtime/refresh_recommendations.sh")
 
     col3, col4 = st.columns(2)
     if col3.button(

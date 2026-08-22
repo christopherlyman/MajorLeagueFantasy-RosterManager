@@ -25,9 +25,9 @@ TODAY="${1:-$(TZ=America/New_York date +%F)}"
 MODE="${REFRESH_ALL_MODE:-full}"
 
 case "$MODE" in
-  daily|full|deep) ;;
+  recommendations|daily|full|deep) ;;
   *)
-    echo "Invalid REFRESH_ALL_MODE=$MODE (expected daily|full|deep)" >&2
+    echo "Invalid REFRESH_ALL_MODE=$MODE (expected recommendations|daily|full|deep)" >&2
     exit 1
     ;;
 esac
@@ -117,8 +117,12 @@ stage "REFRESH ALL: LIVE PIPELINE"
 stage "REFRESH ALL: LEAGUE ROSTERS"
 "$ROOT/runtime/refresh_league_rosters.sh" "$TODAY"
 
-stage "REFRESH ALL: PITCHER FA CANDIDATES"
-docker exec -i \
+if [[ "$MODE" == "recommendations" ]]; then
+  stage "REFRESH ALL: PITCHER FA CANDIDATES (SKIPPED)"
+  echo "SKIP pitcher FA candidates for recommendations mode"
+else
+  stage "REFRESH ALL: PITCHER FA CANDIDATES"
+  docker exec -i \
   -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
   -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
   -e DEFAULT_AS_OF_DATE="$TODAY" \
@@ -135,9 +139,14 @@ docker cp \
 docker cp \
   "${APP_CONTAINER}:$APP_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt" \
   "$HOST_DERIVED_ROOT/pitcher_candidate_keys_${TODAY}.txt"
+fi
 
-stage "REFRESH ALL: PITCHER CANDIDATE SEASON STATS"
-docker exec -i \
+if [[ "$MODE" == "recommendations" ]]; then
+  stage "REFRESH ALL: PITCHER CANDIDATE SEASON STATS (SKIPPED)"
+  echo "SKIP pitcher candidate season stats for recommendations mode"
+else
+  stage "REFRESH ALL: PITCHER CANDIDATE SEASON STATS"
+  docker exec -i \
   -e RMT_RAW_ROOT="$APP_RAW_ROOT" \
   -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" \
   "$APP_CONTAINER" bash -lc "
@@ -160,6 +169,7 @@ else
   python yahoo_bulk_load.py
 fi
 "
+fi
 
 if [[ "$MODE" == "full" || "$MODE" == "deep" ]]; then
   stage "REFRESH ALL: YAHOO PLAYER POOL"
@@ -185,8 +195,12 @@ else
   echo "SKIP player pool refresh for mode=$MODE"
 fi
 
-stage "REFRESH ALL: YAHOO AR BATTER RELIABILITY"
-docker exec -i "$APP_CONTAINER" bash -lc "
+if [[ "$MODE" == "recommendations" ]]; then
+  stage "REFRESH ALL: YAHOO AR BATTER RELIABILITY (SKIPPED)"
+  echo "SKIP Yahoo AR batter reliability for recommendations mode"
+else
+  stage "REFRESH ALL: YAHOO AR BATTER RELIABILITY"
+  docker exec -i "$APP_CONTAINER" bash -lc "
 cd /app && \
 PYTHONPATH=/app \
 python scripts/yahoo/refresh_batter_rank_reliability.py \
@@ -197,6 +211,7 @@ python scripts/yahoo/refresh_batter_rank_reliability.py \
   --sleep-seconds ${YAHOO_SLEEP_SECONDS:-0.25} \
   --targets \"Juan Soto,Gunnar Henderson,Ryan Kreidler,Paul Goldschmidt\"
 "
+fi
 
 stage "REFRESH ALL: RECENT PIPELINE"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
@@ -223,7 +238,21 @@ docker exec -i \
   "$APP_CONTAINER" \
   bash -lc "cd /app && PYTHONPATH=/app python scripts/yahoo/backfill_usual_daily_cap_usage.py"
 
-stage "REFRESH ALL: SPLITS PIPELINE"
+if [[ "$MODE" == "recommendations" \
+      && -f "$HOST_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv" \
+      && -f "$HOST_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv" \
+      && -f "$HOST_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv" \
+      && -f "$HOST_DERIVED_ROOT/mlbam_player_map_fa_${TODAY}.csv" ]]; then
+  stage "REFRESH ALL: SPLITS PIPELINE (CACHED)"
+  echo "REUSE same-day hitter split artifacts for recommendations mode"
+  echo "$HOST_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv"
+  echo "$HOST_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv"
+  docker cp "$HOST_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv" "${APP_CONTAINER}:$APP_DERIVED_ROOT/hitter_split_inputs_${TODAY}.csv"
+  docker cp "$HOST_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv" "${APP_CONTAINER}:$APP_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv"
+  docker cp "$HOST_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv" "${APP_CONTAINER}:$APP_DERIVED_ROOT/mlbam_player_map_${TODAY}.csv"
+  docker cp "$HOST_DERIVED_ROOT/mlbam_player_map_fa_${TODAY}.csv" "${APP_CONTAINER}:$APP_DERIVED_ROOT/mlbam_player_map_fa_${TODAY}.csv"
+else
+  stage "REFRESH ALL: SPLITS PIPELINE"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "
 cd /app && python scripts/build_mlbam_player_map.py \
   --src $APP_RAW_ROOT/yahoo/team_${SAFE_TEAM_KEY}_roster_${TODAY}.json \
@@ -529,6 +558,7 @@ cd /app && python scripts/refresh_hitter_splits_mlb.py \
   --season-end 2026 \
   --out $APP_DERIVED_ROOT/hitter_split_inputs_fa_${TODAY}.csv
 "
+fi
 
 stage "REFRESH ALL: PROJECTION GAME CONTEXT"
 docker exec -i -e RMT_RAW_ROOT="$APP_RAW_ROOT" -e RMT_DERIVED_ROOT="$APP_DERIVED_ROOT" "$APP_CONTAINER" bash -lc "

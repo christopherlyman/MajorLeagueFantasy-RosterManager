@@ -2946,8 +2946,8 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
 
     action_cache_key = _daily_action_plan_cache_key(ctx_obj)
 
-    if refresh_label == "Daily Refresh":
-        with st.spinner("Building Daily Action Plan from Daily Refresh..."):
+    if refresh_label in {"Daily Refresh", "Recommendations Refresh"}:
+        with st.spinner(f"Building Daily Action Plan from {refresh_label}..."):
             st.session_state[action_cache_key] = build_batter_daily_action_plan_preview(ctx_obj)
         return
 
@@ -3008,7 +3008,7 @@ with tab_lineup:
 with tab_recommendations:
     st.subheader("Daily Action Plan")
     st.caption(
-        "Read-only daily planner. Built by Daily Refresh only; normal tab navigation and FA filters do not run the heavy planner."
+        "Read-only daily planner. Built by Recommendations Refresh or Daily Refresh; normal tab navigation and FA filters do not run the heavy planner."
     )
 
     action_cache_key = _daily_action_plan_cache_key(ctx)
@@ -3018,7 +3018,7 @@ with tab_recommendations:
         if stale_reason:
             st.warning(stale_reason)
         else:
-            st.info("Run Daily Refresh to build today's Daily Action Plan.")
+            st.info("Run Recommendations Refresh or Daily Refresh to build today's Daily Action Plan.")
     else:
         cached_plan = st.session_state[action_cache_key]
         top_action, action_rows, action_baseline_rows, action_summary, filter_summary = (
@@ -3042,7 +3042,7 @@ with tab_recommendations:
         if filter_summary["removed_count"] and not top_action:
             st.warning(
                 "Quick Refresh removed stale cached Daily Action recommendation(s), "
-                "but no viable cached recommendation remains. Run Daily Refresh to rebuild the plan."
+                "but no viable cached recommendation remains. Run Recommendations Refresh or Daily Refresh to rebuild the plan."
             )
 
         st.caption(
