@@ -424,6 +424,16 @@ def render_refresh_sidebar(ctx: dict[str, str]) -> None:
     ):
         refresh_choice = ("Recommendations Refresh", "/app/runtime/refresh_recommendations.sh")
 
+    if st.button(
+        "Lock Final Snapshot",
+        type="secondary",
+        use_container_width=True,
+        disabled=refresh_running,
+        key="lock_final_snapshot_btn",
+        help="After final Yahoo roster decisions are made, refresh the roster and lock it as USER_FINAL_LOCKED for evaluation.",
+    ):
+        refresh_choice = ("Lock Final Snapshot", "/app/runtime/refresh_live.sh")
+
     col3, col4 = st.columns(2)
     if col3.button(
         "Full Refresh",

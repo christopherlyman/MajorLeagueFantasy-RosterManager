@@ -2948,7 +2948,34 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
 
     if refresh_label in {"Daily Refresh", "Recommendations Refresh"}:
         with st.spinner(f"Building Daily Action Plan from {refresh_label}..."):
-            st.session_state[action_cache_key] = build_batter_daily_action_plan_preview(ctx_obj)
+            plan = build_batter_daily_action_plan_preview(ctx_obj)
+            st.session_state[action_cache_key] = plan
+            try:
+                from services.evaluation import record_batter_recommendation_eval
+
+                eval_run_id = record_batter_recommendation_eval(
+                    ctx_obj,
+                    refresh_label=refresh_label,
+                    plan=plan,
+                )
+                st.session_state[f"{action_cache_key}_eval_run_id"] = eval_run_id
+            except Exception as exc:
+                st.warning(f"Evaluation snapshot save failed: {exc}")
+        return
+
+    if refresh_label == "Lock Final Snapshot":
+        with st.spinner("Locking final roster snapshot for evaluation..."):
+            try:
+                from services.evaluation import record_final_roster_eval
+
+                eval_run_id = record_final_roster_eval(
+                    ctx_obj,
+                    refresh_label=refresh_label,
+                )
+                st.session_state[f"{action_cache_key}_final_eval_run_id"] = eval_run_id
+                st.success(f"Locked final roster snapshot for eval run {eval_run_id}.")
+            except Exception as exc:
+                st.warning(f"Final evaluation snapshot save failed: {exc}")
         return
 
     if refresh_label == "Quick Refresh":
