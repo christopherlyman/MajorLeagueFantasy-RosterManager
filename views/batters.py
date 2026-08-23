@@ -83,6 +83,13 @@ BATTER_LINEUP_COLUMN_CONFIG = {
     "H2H": st.column_config.NumberColumn("H2H", format="%.1f"),
     "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
     "StatusMod": st.column_config.NumberColumn("StatusMod", format="%.1f"),
+    "Data": st.column_config.TextColumn("Data"),
+    "Y! OPS": st.column_config.TextColumn("Y! OPS"),
+    "Split OPS": st.column_config.TextColumn("Split OPS"),
+    "H/A OPS": st.column_config.TextColumn("H/A OPS"),
+    "D/N OPS": st.column_config.TextColumn("D/N OPS"),
+    "R7": st.column_config.TextColumn("R7"),
+    "Note": st.column_config.TextColumn("Note"),
 }
 
 BATTER_SLOT_COLUMN_CONFIG = {
@@ -1016,6 +1023,98 @@ def _long_dataframe_height(row_count: int, min_height: int = 520) -> int:
 
 
 
+
+def _format_context_rate(value, digits: int = 3) -> str:
+    try:
+        if value in ("", None):
+            return ""
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return ""
+
+
+def _format_context_source(row: dict) -> str:
+    split_source = str(row.get("split_data_source") or "missing").strip()
+    recent_source = str(row.get("recent7_data_source") or "missing").strip()
+
+    if split_source == recent_source:
+        return split_source
+
+    return f"split:{split_source} / r7:{recent_source}"
+
+
+def _format_split_ops_summary(row: dict) -> str:
+    vs_r = _format_context_rate(row.get("split_vs_rhp_ops"))
+    vs_l = _format_context_rate(row.get("split_vs_lhp_ops"))
+
+    parts = []
+    if vs_r:
+        parts.append(f"vR {vs_r}")
+    if vs_l:
+        parts.append(f"vL {vs_l}")
+
+    return " / ".join(parts)
+
+
+def _format_home_away_ops_summary(row: dict) -> str:
+    home = _format_context_rate(row.get("split_home_ops"))
+    away = _format_context_rate(row.get("split_away_ops"))
+
+    parts = []
+    if home:
+        parts.append(f"H {home}")
+    if away:
+        parts.append(f"A {away}")
+
+    return " / ".join(parts)
+
+
+def _format_day_night_ops_summary(row: dict) -> str:
+    day = _format_context_rate(row.get("split_day_ops"))
+    night = _format_context_rate(row.get("split_night_ops"))
+
+    parts = []
+    if day:
+        parts.append(f"D {day}")
+    if night:
+        parts.append(f"N {night}")
+
+    return " / ".join(parts)
+
+
+def _format_recent7_summary(row: dict) -> str:
+    hits = row.get("recent7_hits")
+    ab = row.get("recent7_ab")
+    avg = _format_context_rate(row.get("recent7_avg"))
+
+    hit_ab = ""
+    if hits not in ("", None) or ab not in ("", None):
+        hit_ab = f"{hits or 0}/{ab or 0}"
+
+    pieces = []
+    if hit_ab:
+        pieces.append(hit_ab)
+    if avg:
+        pieces.append(avg)
+
+    for key, label in [
+        ("recent7_r", "R"),
+        ("recent7_hr", "HR"),
+        ("recent7_rbi", "RBI"),
+        ("recent7_sb", "SB"),
+    ]:
+        value = row.get(key)
+        if value not in ("", None):
+            try:
+                if float(value) != 0:
+                    pieces.append(f"{int(float(value))} {label}")
+            except Exception:
+                pass
+
+    return " ".join(pieces)
+
+
+
 def _round_modifier(value):
     if value in (None, ""):
         return None
@@ -1059,6 +1158,13 @@ def _modifier_cells(row: dict) -> dict:
         "B": _round_modifier(row.get("baseline_points")),
         "P": _round_modifier(row.get("pitcher_points")),
         "Hand": _round_modifier(row.get("handedness_points")),
+        "Data": _format_context_source(row),
+        "Y! OPS": _format_context_rate(row.get("hitter_yahoo_ops")),
+        "Split OPS": _format_split_ops_summary(row),
+        "H/A OPS": _format_home_away_ops_summary(row),
+        "D/N OPS": _format_day_night_ops_summary(row),
+        "R7": _format_recent7_summary(row),
+        "Note": str(row.get("note_short") or ""),
         "H/A": _round_modifier(row.get("home_away_points")),
         "D/N": _round_modifier(row.get("day_night_points")),
         "Recent": _round_modifier(_form_modifier_points(row)),

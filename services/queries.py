@@ -574,6 +574,49 @@ def _load_recent7_map(as_of_date: str, variant: str = "roster") -> dict[str, dic
     return out
 
 
+def _merge_context_maps(
+    primary: dict[str, dict],
+    fallback: dict[str, dict],
+    *,
+    primary_source: str,
+    fallback_source: str,
+) -> dict[str, dict]:
+    """Return primary rows with fallback rows for missing players, carrying source metadata."""
+    out: dict[str, dict] = {}
+
+    for key, row in fallback.items():
+        enriched = dict(row)
+        enriched["_context_source"] = fallback_source
+        out[key] = enriched
+
+    for key, row in primary.items():
+        enriched = dict(row)
+        enriched["_context_source"] = primary_source
+        out[key] = enriched
+
+    return out
+
+
+def _load_hitter_split_map_with_fallback(as_of_date: str, primary_variant: str) -> dict[str, dict]:
+    fallback_variant = "fa" if primary_variant == "roster" else "roster"
+    return _merge_context_maps(
+        _load_hitter_split_map(as_of_date, variant=primary_variant),
+        _load_hitter_split_map(as_of_date, variant=fallback_variant),
+        primary_source=primary_variant,
+        fallback_source=fallback_variant,
+    )
+
+
+def _load_recent7_map_with_fallback(as_of_date: str, primary_variant: str) -> dict[str, dict]:
+    fallback_variant = "fa" if primary_variant == "roster" else "roster"
+    return _merge_context_maps(
+        _load_recent7_map(as_of_date, variant=primary_variant),
+        _load_recent7_map(as_of_date, variant=fallback_variant),
+        primary_source=primary_variant,
+        fallback_source=fallback_variant,
+    )
+
+
 def _player_day_key(row: dict) -> str:
     key = str(row.get("yahoo_player_key", "") or "").strip()
     if key:
@@ -1002,8 +1045,8 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
     pitcher_savant = _load_savant_map("pitchers", year)
     lineup_map, lineup_team_map, lineup_data_status = _load_lineup_map(as_of_date)
     pitcher_hand_map = _load_pitcher_hand_map(as_of_date)
-    hitter_split_map = _load_hitter_split_map(as_of_date)
-    recent7_map = _load_recent7_map(as_of_date)
+    hitter_split_map = _load_hitter_split_map_with_fallback(as_of_date, primary_variant="roster")
+    recent7_map = _load_recent7_map_with_fallback(as_of_date, primary_variant="roster")
 
     for r in rows:
         r["slot_display"] = _slot_display(r.get("current_slot"))
@@ -1072,6 +1115,8 @@ def fetch_batter_roster_rows(league_key: str, team_key: str, as_of_date: str):
         r["split_day_ab"] = split_row.get("day_ab", "")
         r["split_night_ops"] = split_row.get("night_ops", "")
         r["split_night_ab"] = split_row.get("night_ab", "")
+        r["split_data_source"] = split_row.get("_context_source", "missing") if split_row else "missing"
+        r["recent7_data_source"] = recent_row.get("_context_source", "missing") if recent_row else "missing"
         r["recent7_hits"] = recent_row.get("recent7_hits", "")
         r["recent7_ab"] = recent_row.get("recent7_ab", "")
         r["recent7_avg"] = recent_row.get("recent7_avg", "")
@@ -1264,8 +1309,8 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
     pitcher_savant = _load_savant_map("pitchers", year)
     lineup_map, lineup_team_map, lineup_data_status = _load_lineup_map(as_of_date)
     pitcher_hand_map = _load_pitcher_hand_map(as_of_date)
-    hitter_split_map = _load_hitter_split_map(as_of_date, variant="fa")
-    recent7_map = _load_recent7_map(as_of_date, variant="fa")
+    hitter_split_map = _load_hitter_split_map_with_fallback(as_of_date, primary_variant="fa")
+    recent7_map = _load_recent7_map_with_fallback(as_of_date, primary_variant="fa")
 
     for r in rows:
         r["slot_display"] = _slot_display(r.get("current_slot"))
@@ -1334,6 +1379,8 @@ def fetch_available_batter_rows(league_key: str, team_key: str, as_of_date: str)
         r["split_day_ab"] = split_row.get("day_ab", "")
         r["split_night_ops"] = split_row.get("night_ops", "")
         r["split_night_ab"] = split_row.get("night_ab", "")
+        r["split_data_source"] = split_row.get("_context_source", "missing") if split_row else "missing"
+        r["recent7_data_source"] = recent_row.get("_context_source", "missing") if recent_row else "missing"
         r["recent7_hits"] = recent_row.get("recent7_hits", "")
         r["recent7_ab"] = recent_row.get("recent7_ab", "")
         r["recent7_avg"] = recent_row.get("recent7_avg", "")
