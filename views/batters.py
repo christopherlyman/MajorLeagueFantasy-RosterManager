@@ -69,10 +69,21 @@ BATTER_LINEUP_COLUMN_CONFIG = {
     "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
     "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
+    "Today": st.column_config.TextColumn("Today"),
+    "Tmr": st.column_config.TextColumn("Tmr"),
+    "D+2": st.column_config.TextColumn("D+2"),
     "Band": st.column_config.TextColumn("Band"),
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
+    "Bat": st.column_config.NumberColumn("Bat", format="%.1f"),
+    "Opp": st.column_config.NumberColumn("Opp", format="%.1f"),
+    "Split": st.column_config.NumberColumn("Split", format="%.1f"),
+    "Form": st.column_config.NumberColumn("Form", format="%.1f"),
+    "Start%": st.column_config.NumberColumn("Start%", format="%.1f"),
+    "Risk": st.column_config.NumberColumn("Risk", format="%.1f"),
+    "Drivers": st.column_config.TextColumn("Drivers"),
+    "Yahoo Key": None,
     "B": st.column_config.NumberColumn("B", format="%.1f"),
     "P": st.column_config.NumberColumn("P", format="%.1f"),
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
@@ -93,15 +104,27 @@ BATTER_LINEUP_COLUMN_CONFIG = {
 }
 
 BATTER_SLOT_COLUMN_CONFIG = {
+    "Selected": st.column_config.TextColumn("Selected"),
     "Player": st.column_config.TextColumn("Player"),
     "Eligible Pos.": st.column_config.TextColumn("Eligible Pos."),
     "Eligible": st.column_config.TextColumn("Eligible"),
     "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
+    "Today": st.column_config.TextColumn("Today"),
+    "Tmr": st.column_config.TextColumn("Tmr"),
+    "D+2": st.column_config.TextColumn("D+2"),
     "Band": st.column_config.TextColumn("Band"),
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
+    "Bat": st.column_config.NumberColumn("Bat", format="%.1f"),
+    "Opp": st.column_config.NumberColumn("Opp", format="%.1f"),
+    "Split": st.column_config.NumberColumn("Split", format="%.1f"),
+    "Form": st.column_config.NumberColumn("Form", format="%.1f"),
+    "Start%": st.column_config.NumberColumn("Start%", format="%.1f"),
+    "Risk": st.column_config.NumberColumn("Risk", format="%.1f"),
+    "Drivers": st.column_config.TextColumn("Drivers"),
+    "Yahoo Key": None,
     "B": st.column_config.NumberColumn("B", format="%.1f"),
     "P": st.column_config.NumberColumn("P", format="%.1f"),
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
@@ -119,9 +142,20 @@ BATTER_FA_COLUMN_CONFIG = {
     "Eligible": st.column_config.TextColumn("Eligible"),
     "% Ros": st.column_config.TextColumn("% Ros"),
     "Rank": st.column_config.TextColumn("Rank"),
+    "Today": st.column_config.TextColumn("Today"),
+    "Tmr": st.column_config.TextColumn("Tmr"),
+    "D+2": st.column_config.TextColumn("D+2"),
     "Game": st.column_config.TextColumn("Game"),
     "Lineup": st.column_config.TextColumn("Lineup"),
     "Status": st.column_config.TextColumn("Status"),
+    "Bat": st.column_config.NumberColumn("Bat", format="%.1f"),
+    "Opp": st.column_config.NumberColumn("Opp", format="%.1f"),
+    "Split": st.column_config.NumberColumn("Split", format="%.1f"),
+    "Form": st.column_config.NumberColumn("Form", format="%.1f"),
+    "Start%": st.column_config.NumberColumn("Start%", format="%.1f"),
+    "Risk": st.column_config.NumberColumn("Risk", format="%.1f"),
+    "Drivers": st.column_config.TextColumn("Drivers"),
+    "Yahoo Key": None,
     "B": st.column_config.NumberColumn("B", format="%.1f"),
     "P": st.column_config.NumberColumn("P", format="%.1f"),
     "Hand": st.column_config.NumberColumn("Hand", format="%.1f"),
@@ -133,6 +167,66 @@ BATTER_FA_COLUMN_CONFIG = {
     "LineupMod": st.column_config.NumberColumn("LineupMod", format="%.1f"),
     "StatusMod": st.column_config.NumberColumn("StatusMod", format="%.1f"),
 }
+
+
+BATTER_LINEUP_DECISION_COLUMNS = [
+    "Slot",
+    "Player",
+    "Eligible Pos.",
+    "% Ros",
+    "Today",
+    "Tmr",
+    "D+2",
+    "Band",
+    "Game",
+    "Lineup",
+    "Status",
+    "Bat",
+    "Opp",
+    "Split",
+    "Form",
+    "Start%",
+    "Risk",
+]
+
+BATTER_SLOT_DECISION_COLUMNS = [
+    "Selected",
+    "Player",
+    "Eligible Pos.",
+    "% Ros",
+    "Today",
+    "Tmr",
+    "D+2",
+    "Band",
+    "Game",
+    "Lineup",
+    "Status",
+    "Bat",
+    "Opp",
+    "Split",
+    "Form",
+    "Start%",
+    "Risk",
+]
+
+BATTER_FA_DECISION_COLUMNS = [
+    "Player",
+    "Eligible",
+    "% Ros",
+    "Today",
+    "Tmr",
+    "D+2",
+    "Game",
+    "Lineup",
+    "Status",
+    "Bat",
+    "Opp",
+    "Split",
+    "Form",
+    "Start%",
+    "Risk",
+]
+
 
 
 SLOT_PRESSURE_FAMILY_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL"]
@@ -950,6 +1044,7 @@ def build_starting_lineup_table(assignment: dict[str, dict | None]) -> list[dict
                 "Slot": slot_label(slot_id, slot_type),
                 "Threshold": str(threshold),
                 "Player": chosen.get("player_display", "") if chosen else "",
+                "Yahoo Key": chosen.get("yahoo_player_key", "") if chosen else "",
                 "Eligible Pos.": chosen.get("eligible_display", "") if chosen else "",
                 "% Ros": _format_percent_owned(chosen.get("percent_owned")) if chosen else "",
                 "Rank": chosen.get("ranking", "") if chosen else "",
@@ -970,6 +1065,8 @@ def build_slot_table(slot_id: str, slot_type: str, rows: list[dict], selected_na
             {
                 "Selected": "✅" if make_player_key(r) == selected_name else "",
                 "Player": r.get("player_display", ""),
+                "Yahoo Key": r.get("yahoo_player_key", ""),
+                "Eligible Pos.": r.get("eligible_display", ""),
                 "% Ros": _format_percent_owned(r.get("percent_owned")),
                 "Rank": r.get("ranking", ""),
                 "Band": r.get("ranking_band", ""),
@@ -994,6 +1091,7 @@ def build_bench_table(all_rows: list[dict], assignment: dict[str, dict | None]) 
                 {
                     "Slot": display_slot,
                     "Player": r.get("player_display", ""),
+                    "Yahoo Key": r.get("yahoo_player_key", ""),
                     "Eligible Pos.": r.get("eligible_display", ""),
                     "% Ros": _format_percent_owned(r.get("percent_owned")),
                     "Threshold": "",
@@ -1152,9 +1250,62 @@ def _form_modifier_points(row: dict) -> float:
     )
 
 
+
+def _driver_float(value) -> float | None:
+    if value in ("", None):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _format_driver_value(label: str, value) -> tuple[str, float] | None:
+    numeric = _driver_float(value)
+    if numeric is None or abs(numeric) < 0.5:
+        return None
+    return (f"{label} {numeric:+.1f}", abs(numeric))
+
+
+def _format_decision_drivers(row: dict) -> str:
+    row = row or {}
+    note = str(row.get("note_short") or "").strip()
+
+    if "No game today" in note:
+        return "No game today"
+    if "Unavailable" in note:
+        return "Unavailable"
+
+    candidates = [
+        _format_driver_value("Bat", row.get("baseline_points")),
+        _format_driver_value("Opp", row.get("pitcher_points")),
+        _format_driver_value("Hand", row.get("handedness_points")),
+        _format_driver_value("H/A", row.get("home_away_points")),
+        _format_driver_value("D/N", row.get("day_night_points")),
+        _format_driver_value("Form", _form_modifier_points(row)),
+        _format_driver_value("Start", _start_modifier_value(row)),
+        _format_driver_value("Risk", row.get("status_risk_points")),
+    ]
+
+    drivers = [item for item in candidates if item is not None]
+    drivers.sort(key=lambda item: item[1], reverse=True)
+
+    if not drivers:
+        return note
+
+    return " | ".join(text for text, _score in drivers[:4])
+
+
 def _modifier_cells(row: dict) -> dict:
     row = row or {}
     return {
+        "Drivers": _format_decision_drivers(row),
+        "Bat": _round_modifier(row.get("baseline_points")),
+        "Opp": _round_modifier(row.get("pitcher_points")),
+        "Split": _round_modifier(row.get("handedness_points")),
+        "Form": _round_modifier(_form_modifier_points(row)),
+        "Start%": _start_modifier_value(row),
+        "Risk": _round_modifier(row.get("status_risk_points")),
         "B": _round_modifier(row.get("baseline_points")),
         "P": _round_modifier(row.get("pitcher_points")),
         "Hand": _round_modifier(row.get("handedness_points")),
@@ -1177,9 +1328,23 @@ def _modifier_cells(row: dict) -> dict:
 
 def _empty_modifier_cells() -> dict:
     return {
+        "Drivers": "",
+        "Bat": None,
+        "Opp": None,
+        "Split": None,
+        "Form": None,
+        "Start%": None,
+        "Risk": None,
         "B": None,
         "P": None,
         "Hand": None,
+        "Data": "",
+        "Y! OPS": "",
+        "Split OPS": "",
+        "H/A OPS": "",
+        "D/N OPS": "",
+        "R7": "",
+        "Note": "",
         "H/A": None,
         "D/N": None,
         "Recent": None,
@@ -1188,6 +1353,31 @@ def _empty_modifier_cells() -> dict:
         "LineupMod": None,
         "StatusMod": None,
     }
+
+
+
+def _decision_display_df(rows_or_df, decision_columns: list[str], show_diagnostics: bool) -> pd.DataFrame:
+    if isinstance(rows_or_df, pd.DataFrame):
+        df = rows_or_df.copy()
+    else:
+        df = pd.DataFrame(rows_or_df)
+
+    if show_diagnostics:
+        return df
+
+    visible_columns = [col for col in decision_columns if col in df.columns]
+    if not visible_columns:
+        return pd.DataFrame(columns=decision_columns)
+
+    return df.loc[:, visible_columns].copy()
+
+
+def _column_config_for_display(column_config: dict, df: pd.DataFrame) -> dict:
+    if df is None or not hasattr(df, "columns"):
+        return column_config
+
+    visible = set(df.columns)
+    return {key: value for key, value in column_config.items() if key in visible}
 
 
 def _lineup_display(row: dict | None) -> str:
@@ -1260,6 +1450,53 @@ def _project_batter_rows(rows: list[dict], lookup: dict[str, dict], projection_v
         _project_batter_row(row, lookup.get(str(row.get("yahoo_player_key") or "")), projection_view)
         for row in rows
     ]
+
+
+def _compact_rank_text(value) -> str:
+    if value in ("", None):
+        return ""
+    try:
+        numeric = float(value or 0)
+    except Exception:
+        return str(value)
+
+    if numeric <= 0:
+        return "—"
+
+    return str(int(round(numeric)))
+
+
+def _projection_rank_text(projection_row: dict | None, field: str) -> str:
+    if not projection_row:
+        return ""
+
+    return _compact_rank_text(projection_row.get(field))
+
+
+def _apply_multiday_rank_columns(
+    table_rows: list[dict],
+    source_rows: list[dict],
+    projection_lookup: dict[str, dict],
+) -> list[dict]:
+    today_rank_by_key = {
+        str(row.get("yahoo_player_key") or ""): _compact_rank_text(row.get("ranking"))
+        for row in source_rows
+        if row.get("yahoo_player_key")
+    }
+
+    out: list[dict] = []
+    for table_row in table_rows:
+        row = dict(table_row)
+        yahoo_key = str(row.get("Yahoo Key") or "").strip()
+        projection_row = projection_lookup.get(yahoo_key) if yahoo_key else None
+
+        row["Today"] = today_rank_by_key.get(yahoo_key) or _compact_rank_text(row.get("Rank"))
+        row["Tmr"] = _projection_rank_text(projection_row, "Tomorrow")
+        row["D+2"] = _projection_rank_text(projection_row, "Day2")
+
+        out.append(row)
+
+    return out
 
 
 def _projection_caption(projection_view: str) -> str:
@@ -3120,8 +3357,26 @@ with tab_lineup:
             build_starting_lineup_table(display_assignment)
             + build_bench_table(projected_rows, display_assignment)
         )
-        display_df = pd.DataFrame(display_combined_roster_rows)
-        display_styler = display_df.style.apply(_style_combined_roster_row, axis=1)
+
+    roster_multiday_lookup = _projection_lookup(batter_multiday_projection, "OWNED")
+    display_combined_roster_rows = _apply_multiday_rank_columns(
+        display_combined_roster_rows,
+        rows,
+        roster_multiday_lookup,
+    )
+
+    show_roster_diagnostics = st.checkbox(
+        "Show scoring diagnostics",
+        value=False,
+        key=f"show_batter_roster_diagnostics_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+        help="Show scoring components, split OPS, recent7, source fields, and full scoring notes.",
+    )
+    display_df = _decision_display_df(
+        pd.DataFrame(display_combined_roster_rows),
+        BATTER_LINEUP_DECISION_COLUMNS,
+        show_roster_diagnostics,
+    )
+    display_styler = display_df.style.apply(_style_combined_roster_row, axis=1)
 
     total_score = sum(int(r["ranking"]) for r in display_assignment.values() if r)
     st.subheader(f"Optimized starting lineup score: {total_score}")
@@ -3132,8 +3387,8 @@ with tab_lineup:
         width="content",
         height=roster_table_height,
         hide_index=True,
-        column_config=BATTER_LINEUP_COLUMN_CONFIG,
-        key=f"combined_roster_{ctx['as_of_date']}_{lineup_projection_view}_{len(display_combined_roster_rows)}",
+        column_config=_column_config_for_display(BATTER_LINEUP_COLUMN_CONFIG, display_df),
+        key=f"combined_roster_{ctx['as_of_date']}_{lineup_projection_view}_{int(show_roster_diagnostics)}_{len(display_combined_roster_rows)}",
     )
 
 
@@ -3280,18 +3535,34 @@ with tab_slots:
 
     st.divider()
     st.subheader("Slot candidates")
+    show_slot_diagnostics = st.checkbox(
+        "Show scoring diagnostics",
+        value=False,
+        key=f"show_batter_slot_diagnostics_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+        help="Show scoring components for slot candidate tables.",
+    )
 
     for slot_id, slot_type in SLOT_ORDER:
         chosen = assignment.get(slot_id)
         chosen_name = make_player_key(chosen) if chosen else None
         st.subheader(slot_label(slot_id, slot_type))
         slot_table_rows = build_slot_table(slot_id, slot_type, active_rows, chosen_name)
-        st.dataframe(
+        slot_table_rows = _apply_multiday_rank_columns(
             slot_table_rows,
+            rows,
+            _projection_lookup(batter_multiday_projection, "OWNED"),
+        )
+        slot_table_df = _decision_display_df(
+            slot_table_rows,
+            BATTER_SLOT_DECISION_COLUMNS,
+            show_slot_diagnostics,
+        )
+        st.dataframe(
+            slot_table_df,
             width="content",
             hide_index=True,
-            column_config=BATTER_SLOT_COLUMN_CONFIG,
-            key=f"slot_table_{slot_id}_{ctx['as_of_date']}_{len(slot_table_rows)}",
+            column_config=_column_config_for_display(BATTER_SLOT_COLUMN_CONFIG, slot_table_df),
+            key=f"slot_table_{slot_id}_{ctx['as_of_date']}_{int(show_slot_diagnostics)}_{len(slot_table_rows)}",
         )
 
 with tab_fa:
@@ -3307,6 +3578,12 @@ with tab_fa:
         )
         st.caption(_projection_caption(fa_projection_view))
         _render_projection_explainer(fa_projection_view)
+        show_fa_diagnostics = st.checkbox(
+            "Show scoring diagnostics",
+            value=False,
+            key=f"show_batter_fa_diagnostics_{ctx['league_key']}_{ctx['team_key']}_{ctx['as_of_date']}",
+            help="Show scoring components, split OPS, recent7, source fields, and full scoring notes for free agents.",
+        )
 
         if "fa_slot_filter" not in st.session_state:
             st.session_state["fa_slot_filter"] = "All"
@@ -3350,6 +3627,7 @@ with tab_fa:
             fa_rows.append(
                 {
                     "Player": r.get("player_display", ""),
+                    "Yahoo Key": r.get("yahoo_player_key", ""),
                     "Eligible": r.get("eligible_display", ""),
                     "% Ros": _format_percent_owned(r.get("percent_owned")),
                     "Rank": r.get("ranking", ""),
@@ -3359,15 +3637,25 @@ with tab_fa:
                     **_modifier_cells(r),
                 }
             )
+        fa_rows = _apply_multiday_rank_columns(
+            fa_rows,
+            available_batters,
+            fa_projection_lookup,
+        )
         fa_table_height = _long_dataframe_height(len(fa_rows), min_height=620)
+        fa_display_df = _decision_display_df(
+            fa_rows,
+            BATTER_FA_DECISION_COLUMNS,
+            show_fa_diagnostics,
+        )
 
         st.dataframe(
-            fa_rows,
+            fa_display_df,
             width="content",
             height=fa_table_height,
             hide_index=True,
-            column_config=BATTER_FA_COLUMN_CONFIG,
-            key=f"fa_batters_{ctx['as_of_date']}_{fa_projection_view}_{current_filter}_{len(fa_rows)}",
+            column_config=_column_config_for_display(BATTER_FA_COLUMN_CONFIG, fa_display_df),
+            key=f"fa_batters_{ctx['as_of_date']}_{fa_projection_view}_{current_filter}_{int(show_fa_diagnostics)}_{len(fa_rows)}",
         )
 
 st.divider()
