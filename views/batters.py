@@ -1356,6 +1356,116 @@ def _empty_modifier_cells() -> dict:
 
 
 
+
+def _eval_snapshot_value(value):
+    if value in ("", None):
+        return value
+    try:
+        # Convert numpy scalar-like values without importing numpy.
+        if hasattr(value, "item"):
+            return value.item()
+    except Exception:
+        pass
+    return value
+
+
+def _eval_batter_baseline_row(slot_id: str, row: dict | None) -> dict:
+    if not row:
+        return {
+            "Slot": slot_id,
+            "selected_position": slot_id,
+            "Player": "EMPTY",
+            "Rank": "",
+            "ranking": None,
+            "is_starting_slot": False,
+        }
+
+    row = row or {}
+    player_label = _daily_action_player_key(row)
+    if not player_label:
+        player_label = str(row.get("player_display") or row.get("full_name") or row.get("player_name") or "")
+
+    try:
+        rank_value = float(row.get("ranking") or 0)
+    except Exception:
+        rank_value = 0.0
+
+    try:
+        game_text = game_with_pitcher(row)
+    except Exception:
+        game_text = str(row.get("game_display") or "")
+
+    try:
+        lineup_text = _lineup_display(row)
+    except Exception:
+        lineup_text = str(row.get("lineup_status") or "")
+
+    out = {
+        "Slot": slot_id,
+        "selected_position": slot_id,
+        "Player": player_label,
+        "Yahoo Key": row.get("yahoo_player_key"),
+        "yahoo_player_key": row.get("yahoo_player_key"),
+        "mlb_team_abbr": row.get("mlb_team_abbr"),
+        "raw_player_display": row.get("player_display"),
+        "raw_full_name": row.get("full_name") or row.get("player_name"),
+        "Eligible": row.get("eligible_display", ""),
+        "Eligible Pos.": row.get("eligible_display", ""),
+        "% Ros": _format_percent_owned(row.get("percent_owned")),
+        "percent_owned": row.get("percent_owned"),
+        "Rank": int(rank_value) if rank_value else "",
+        "ranking": rank_value,
+        "Band": row.get("ranking_band", ""),
+        "ranking_band": row.get("ranking_band", ""),
+        "Policy": row.get("policy_status", ""),
+        "Game": game_text,
+        "game_display": row.get("game_display", ""),
+        "Lineup": lineup_text,
+        "lineup_status": row.get("lineup_status", ""),
+        "Status": row.get("status_display", ""),
+        "status_display": row.get("status_display", ""),
+    }
+
+    out.update(_modifier_cells(row))
+
+    raw_fields = [
+        "baseline_points",
+        "pitcher_points",
+        "handedness_points",
+        "home_away_points",
+        "day_night_points",
+        "h2h_matchup_points",
+        "lineup_points",
+        "status_risk_points",
+        "start_frequency_rate",
+        "hitter_yahoo_ops",
+        "split_vs_rhp_ops",
+        "split_vs_lhp_ops",
+        "split_home_ops",
+        "split_away_ops",
+        "split_day_ops",
+        "split_night_ops",
+        "recent7_hits",
+        "recent7_ab",
+        "recent7_avg",
+        "recent7_hr",
+        "recent7_r",
+        "recent7_rbi",
+        "recent7_sb",
+        "recent7_bb",
+        "recent7_k",
+        "split_data_source",
+        "recent7_data_source",
+        "note_short",
+    ]
+
+    for field in raw_fields:
+        if field in row:
+            out[field] = _eval_snapshot_value(row.get(field))
+
+    return out
+
+
 def _decision_display_df(rows_or_df, decision_columns: list[str], show_diagnostics: bool) -> pd.DataFrame:
     if isinstance(rows_or_df, pd.DataFrame):
         df = rows_or_df.copy()
@@ -2436,16 +2546,7 @@ def build_batter_recommendation_preview(ctx_obj: dict, projection_view: str, min
     baseline_rows: list[dict] = []
     for slot_id, slot_type in SLOT_ORDER:
         r = baseline_assignment.get(slot_id)
-        baseline_rows.append(
-            {
-                "Slot": slot_id,
-                "Player": player_key(r) if r else "EMPTY",
-                "Rank": int(float(r.get("ranking") or 0)) if r else "",
-                "Policy": r.get("policy_status", "") if r else "",
-                "Game": r.get("game_display", "") if r else "",
-                "Lineup": lineup_status_with_rotowire(r) if r else "",
-            }
-        )
+        baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
 
     drop_candidates = []
     for r in active_owned:
@@ -2857,16 +2958,7 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
     baseline_rows: list[dict] = []
     for slot_id, slot_type in SLOT_ORDER:
         r = baseline_assignment.get(slot_id)
-        baseline_rows.append(
-            {
-                "Slot": slot_id,
-                "Player": _daily_action_player_key(r) if r else "EMPTY",
-                "Rank": int(float(r.get("ranking") or 0)) if r else "",
-                "Eligible": r.get("eligible_display", "") if r else "",
-                "Lineup": _daily_action_rw_status(r) if r else "",
-                "Game": r.get("game_display", "") if r else "",
-            }
-        )
+        baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
 
     drop_candidates = []
     for r in active_owned:
