@@ -180,9 +180,17 @@ def _cached_actual_map(stat_date: str, player_keys: list[str]) -> dict[str, dict
 def _fetch_missing_daily_actuals(stat_date: str, player_keys: list[str]) -> None:
     # Reuse the existing Yahoo daily-stat loader. It handles token retrieval,
     # parsing Yahoo's player stats response, and writing the cache table.
+    # That script expects /app/scripts/yahoo on sys.path when it imports auth.py.
+    import sys
     import requests
+
+    yahoo_script_dir = Path(__file__).resolve().parents[1] / "scripts" / "yahoo"
+    yahoo_script_dir_text = str(yahoo_script_dir)
+    if yahoo_script_dir_text not in sys.path:
+        sys.path.insert(0, yahoo_script_dir_text)
+
     from auth import get_access_token
-    from scripts.yahoo.refresh_recent_yahoo_api import get_player_daily_stats
+    from refresh_recent_yahoo_api import get_player_daily_stats
 
     token = get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
