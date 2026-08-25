@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from services.db import get_connection
+from scripts.yahoo.dated_roster import fetch_yahoo_dated_roster
 
 
 ACTIVE_SLOTS = {"C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL", "P", "SP", "RP"}
@@ -509,6 +510,93 @@ def record_batter_recommendation_eval(
 
     return eval_run_id
 
+
+
+def record_historical_final_roster_eval(
+    *,
+    league_key: str,
+    team_key: str,
+    eval_date: str,
+    refresh_label: str = "Yahoo Historical Final",
+) -> int:
+    """Replace USER_FINAL_LOCKED with Yahoo's authoritative dated roster."""
+    ensure_eval_tables()
+
+    roster_date = date.fromisoformat(eval_date)
+    final_rows = fetch_yahoo_dated_roster(team_key, roster_date)
+
+    if not final_rows:
+        raise RuntimeError(
+            f"Yahoo historical roster returned no players "
+            f"team_key={team_key} eval_date={eval_date}"
+        )
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT eval_run_id
+                FROM rmt.eval_run
+                WHERE league_key = %s
+                  AND team_key = %s
+                  AND eval_date = %s::date
+                  AND app_section = 'batters'
+                ORDER BY eval_run_id DESC
+                LIMIT 1
+                """,
+                (league_key, team_key, eval_date),
+            )
+            row = cur.fetchone()
+
+        if row:
+            eval_run_id = int(row[0])
+        else:
+            eval_run_id = _create_eval_run(
+                conn,
+                league_key=league_key,
+                team_key=team_key,
+                eval_date=eval_date,
+                refresh_label=refresh_label,
+                context={
+                    "warning": "historical_final_without_prior_eval_run",
+                    "source": "yahoo_historical_roster",
+                },
+            )
+
+        _insert_lineup_rows(
+            conn,
+            eval_run_id,
+            "USER_FINAL_LOCKED",
+            final_rows,
+        )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rmt.eval_run
+                SET context_json = context_json || %s::jsonb
+                WHERE eval_run_id = %s
+                """,
+                (
+                    _json_dumps(
+                        {
+                            "final_lock": {
+                                "refresh_label": refresh_label,
+                                "source": "yahoo_historical_roster",
+                                "authoritative": True,
+                                "roster_date": eval_date,
+                                "user_final_locked_rows": len(final_rows),
+                                "locked_at_utc": datetime.utcnow().isoformat(),
+                            }
+                        }
+                    ),
+                    eval_run_id,
+                ),
+            )
+
+        conn.commit()
+
+    return eval_run_id
 
 def record_final_roster_eval(
     ctx_obj: dict,

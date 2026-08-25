@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from services.db import get_connection
+from services.evaluation import record_historical_final_roster_eval
 
 HITTER_BASE_SLOTS = {"C", "1B", "2B", "3B", "SS", "IF", "UTIL"}
 
@@ -82,10 +83,17 @@ def ensure_eval_actual_tables() -> None:
         conn.commit()
 
 
-def _load_eval_hitter_players(eval_date: str, league_key: str | None = None, team_key: str | None = None, include_unlocked: bool = False) -> list[dict[str, Any]]:
+def _load_eval_hitter_players(
+    eval_date: str,
+    league_key: str | None = None,
+    team_key: str | None = None,
+    include_unlocked: bool = False,
+    eval_run_id: int | None = None,
+) -> list[dict[str, Any]]:
     params: list[Any] = [eval_date]
     league_filter = ""
     team_filter = ""
+    run_filter = ""
 
     if league_key:
         league_filter = "AND r.league_key = %s"
@@ -94,6 +102,10 @@ def _load_eval_hitter_players(eval_date: str, league_key: str | None = None, tea
     if team_key:
         team_filter = "AND r.team_key = %s"
         params.append(team_key)
+
+    if eval_run_id is not None:
+        run_filter = "AND r.eval_run_id = %s"
+        params.append(eval_run_id)
 
     lock_filter = "" if include_unlocked else "AND r.context_json ? 'final_lock'"
 
@@ -114,6 +126,7 @@ def _load_eval_hitter_players(eval_date: str, league_key: str | None = None, tea
         WHERE r.eval_date = %s::date
           {league_filter}
           {team_filter}
+          {run_filter}
           {lock_filter}
           AND s.is_starting_slot
           AND s.yahoo_player_key IS NOT NULL
@@ -177,10 +190,10 @@ def _cached_actual_map(stat_date: str, player_keys: list[str]) -> dict[str, dict
     return out
 
 
-def _fetch_missing_daily_actuals(stat_date: str, player_keys: list[str]) -> None:
-    # Reuse the existing Yahoo daily-stat loader. It handles token retrieval,
-    # parsing Yahoo's player stats response, and writing the cache table.
-    # That script expects /app/scripts/yahoo on sys.path when it imports auth.py.
+def _refresh_daily_actuals(stat_date: str, player_keys: list[str]) -> None:
+    # Route every required historical player through the existing Yahoo
+    # daily-stat loader. That loader reuses cache rows fetched after its
+    # finalization cutoff and re-fetches provisional or missing rows.
     import sys
     import requests
 
@@ -197,14 +210,28 @@ def _fetch_missing_daily_actuals(stat_date: str, player_keys: list[str]) -> None
 
     with requests.Session() as session:
         for idx, player_key in enumerate(player_keys, start=1):
-            print(f"FETCH_ACTUAL [{idx}/{len(player_keys)}] player_key={player_key} stat_date={stat_date}", flush=True)
+            print(
+                f"REFRESH_ACTUAL [{idx}/{len(player_keys)}] "
+                f"player_key={player_key} stat_date={stat_date}",
+                flush=True,
+            )
             try:
                 get_player_daily_stats(session, headers, player_key, stat_date)
             except Exception as exc:
-                print(f"WARN_FETCH_ACTUAL_FAILED player_key={player_key} stat_date={stat_date} error={type(exc).__name__}: {exc}", flush=True)
+                print(
+                    f"WARN_REFRESH_ACTUAL_FAILED player_key={player_key} "
+                    f"stat_date={stat_date} error={type(exc).__name__}: {exc}",
+                    flush=True,
+                )
 
 
-def _upsert_scorecard_rows(eval_date: str, stat_date: str, rows: list[dict[str, Any]], actuals: dict[str, dict[str, Any]], is_final: bool) -> list[dict[str, Any]]:
+def _upsert_scorecard_rows(
+    eval_date: str,
+    stat_date: str,
+    rows: list[dict[str, Any]],
+    actuals: dict[str, dict[str, Any]],
+    finalization_cutoff_met: bool,
+) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, str], list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault((int(row["eval_run_id"]), str(row["snapshot_source"])), []).append(row)
@@ -286,10 +313,13 @@ def _upsert_scorecard_rows(eval_date: str, stat_date: str, rows: list[dict[str, 
                 if total_ab > 0:
                     batting_avg = Decimal(total_hits) / Decimal(total_ab)
 
+                row_is_final = finalization_cutoff_met and not missing_keys
+
                 score_json = {
                     "eval_date": eval_date,
                     "stat_date": stat_date,
                     "missing_keys": missing_keys,
+                    "finalization_cutoff_met": finalization_cutoff_met,
                     "notes": "Hitter-only actual scorecard. Pitchers are excluded until pitcher actual cache exists.",
                 }
 
@@ -297,7 +327,7 @@ def _upsert_scorecard_rows(eval_date: str, stat_date: str, rows: list[dict[str, 
                     eval_run_id,
                     snapshot_source,
                     stat_date,
-                    is_final,
+                    row_is_final,
                     len(source_rows),
                     len(distinct_keys),
                     actual_rows,
@@ -320,7 +350,7 @@ def _upsert_scorecard_rows(eval_date: str, stat_date: str, rows: list[dict[str, 
                         "eval_run_id": eval_run_id,
                         "snapshot_source": snapshot_source,
                         "stat_date": stat_date,
-                        "is_final": is_final,
+                        "is_final": row_is_final,
                         "starting_hitter_rows": len(source_rows),
                         "distinct_hitter_keys": len(distinct_keys),
                         "actual_rows": actual_rows,
@@ -347,35 +377,63 @@ def run_hitter_scorecard(
     *,
     league_key: str | None = None,
     team_key: str | None = None,
-    fetch_missing: bool = False,
+    refresh_final_roster: bool = False,
+    refresh_actuals: bool = False,
     allow_incomplete: bool = False,
     include_unlocked: bool = False,
 ) -> list[dict[str, Any]]:
     stat_date = stat_date or eval_date
-    is_final = _is_final_stat_date(stat_date)
+    finalization_cutoff_met = _is_final_stat_date(stat_date)
 
-    if not is_final and not allow_incomplete:
+    if not finalization_cutoff_met and not allow_incomplete:
         raise RuntimeError(
             f"Stats for {stat_date} are not final yet. Re-run after 10:00 UTC next day, "
             "or pass --allow-incomplete for a provisional scorecard."
         )
 
+    authoritative_eval_run_id: int | None = None
+
+    if refresh_final_roster:
+        if not league_key or not team_key:
+            raise RuntimeError(
+                "--refresh-final-roster requires both league_key and team_key"
+            )
+
+        authoritative_eval_run_id = record_historical_final_roster_eval(
+            league_key=league_key,
+            team_key=team_key,
+            eval_date=eval_date,
+        )
+        print(
+            f"HISTORICAL_FINAL_ROSTER_REFRESHED "
+            f"eval_run_id={authoritative_eval_run_id} eval_date={eval_date}",
+            flush=True,
+        )
+
     ensure_eval_actual_tables()
 
-    rows = _load_eval_hitter_players(eval_date, league_key=league_key, team_key=team_key, include_unlocked=include_unlocked)
+    rows = _load_eval_hitter_players(
+        eval_date,
+        league_key=league_key,
+        team_key=team_key,
+        include_unlocked=include_unlocked,
+        eval_run_id=authoritative_eval_run_id,
+    )
     keys = sorted({str(r["yahoo_player_key"]) for r in rows if r.get("yahoo_player_key")})
 
     actuals = _cached_actual_map(stat_date, keys)
-    missing_or_not_success = [
-        key for key in keys
-        if key not in actuals or str(actuals[key].get("fetch_status") or "").strip().lower() != "success"
-    ]
 
-    if fetch_missing and missing_or_not_success:
-        _fetch_missing_daily_actuals(stat_date, missing_or_not_success)
+    if refresh_actuals and keys:
+        _refresh_daily_actuals(stat_date, keys)
         actuals = _cached_actual_map(stat_date, keys)
 
-    return _upsert_scorecard_rows(eval_date, stat_date, rows, actuals, is_final)
+    return _upsert_scorecard_rows(
+        eval_date,
+        stat_date,
+        rows,
+        actuals,
+        finalization_cutoff_met,
+    )
 
 
 def main() -> int:
@@ -384,7 +442,18 @@ def main() -> int:
     parser.add_argument("--stat-date", default="")
     parser.add_argument("--league-key", default="")
     parser.add_argument("--team-key", default="")
-    parser.add_argument("--fetch-missing", action="store_true")
+    parser.add_argument(
+        "--refresh-final-roster",
+        action="store_true",
+        help="Replace USER_FINAL_LOCKED from Yahoo's historical roster for eval-date.",
+    )
+    parser.add_argument(
+        "--refresh-actuals",
+        "--fetch-missing",
+        dest="refresh_actuals",
+        action="store_true",
+        help="Revalidate every required hitter through the Yahoo daily-stat cache loader.",
+    )
     parser.add_argument("--allow-incomplete", action="store_true")
     parser.add_argument("--include-unlocked", action="store_true")
     args = parser.parse_args()
@@ -394,7 +463,8 @@ def main() -> int:
         args.stat_date or args.eval_date,
         league_key=args.league_key or None,
         team_key=args.team_key or None,
-        fetch_missing=args.fetch_missing,
+        refresh_final_roster=args.refresh_final_roster,
+        refresh_actuals=args.refresh_actuals,
         allow_incomplete=args.allow_incomplete,
         include_unlocked=args.include_unlocked,
     )
