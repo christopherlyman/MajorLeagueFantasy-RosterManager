@@ -1357,6 +1357,131 @@ def _empty_modifier_cells() -> dict:
 
 
 
+
+def _nonempty_lock_assignments(locks: dict | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for slot, player in (locks or {}).items():
+        player_text = str(player or "").strip()
+        if player_text:
+            out[str(slot)] = player_text
+    return out
+
+
+def _eval_empty_slot_candidate_reason(row: dict, slot_id: str, slot_type: str) -> str:
+    reasons: list[str] = []
+
+    try:
+        threshold = float(slot_min_ranking(slot_id, slot_type))
+    except Exception:
+        threshold = None
+
+    try:
+        ranking = float(row.get("ranking") or 0.0)
+    except Exception:
+        ranking = 0.0
+
+    if is_unavailable(row):
+        reasons.append("unavailable")
+    if not eligible_for_slot(row, slot_type):
+        reasons.append("not_eligible")
+    if not has_game_today(row):
+        reasons.append("no_game_today")
+    if threshold is not None and ranking < threshold:
+        reasons.append(f"rank_below_threshold({ranking:.1f}<{threshold:.1f})")
+
+    return "; ".join(reasons) if reasons else "startable"
+
+
+def _eval_batter_empty_baseline_row(
+    slot_id: str,
+    slot_type: str,
+    candidate_rows: list[dict] | None,
+    locks: dict | None,
+    assignment: dict | None = None,
+) -> dict:
+    candidate_rows = list(candidate_rows or [])
+    assignment = assignment or {}
+    nonempty_locks = _nonempty_lock_assignments(locks)
+    locked_name = nonempty_locks.get(slot_id, "")
+
+    assigned_by_name: dict[str, str] = {}
+    for assigned_slot, assigned_row in assignment.items():
+        if not assigned_row:
+            continue
+        assigned_name = _daily_action_player_key(assigned_row)
+        if assigned_name:
+            assigned_by_name[assigned_name] = str(assigned_slot)
+
+    try:
+        threshold = float(slot_min_ranking(slot_id, slot_type))
+    except Exception:
+        threshold = None
+
+    eligible_candidates = [r for r in candidate_rows if eligible_for_slot(r, slot_type)]
+    game_candidates = [r for r in eligible_candidates if has_game_today(r)]
+    startable_candidates = [r for r in game_candidates if startable_for_slot(r, slot_id, slot_type)]
+    unassigned_startable_candidates = [
+        r for r in startable_candidates
+        if _daily_action_player_key(r) not in assigned_by_name
+    ]
+
+    top_pool = game_candidates or eligible_candidates
+    top_candidate = None
+    if top_pool:
+        top_candidate = sorted(
+            top_pool,
+            key=lambda r: (
+                float(r.get("ranking") or 0.0),
+                str(r.get("player_display") or r.get("full_name") or ""),
+            ),
+            reverse=True,
+        )[0]
+
+    if locked_name:
+        empty_reason = "Locked player was unavailable, invalid, duplicated, or below threshold."
+    elif not eligible_candidates:
+        empty_reason = "No eligible active candidates for slot."
+    elif not game_candidates:
+        empty_reason = "Eligible candidates have no game today."
+    elif not startable_candidates:
+        empty_reason = "Eligible game candidates are below slot threshold."
+    elif not unassigned_startable_candidates:
+        empty_reason = "All startable candidates are already assigned or locked to other slots."
+    else:
+        empty_reason = "Optimizer left slot empty despite unassigned startable candidates."
+
+    out = {
+        "Slot": slot_id,
+        "selected_position": slot_id,
+        "Player": "EMPTY",
+        "Rank": "",
+        "ranking": None,
+        "is_starting_slot": False,
+        "empty_reason": empty_reason,
+        "slot_type": slot_type,
+        "slot_threshold": threshold,
+        "locked_player": locked_name,
+        "eligible_candidate_count": len(eligible_candidates),
+        "game_candidate_count": len(game_candidates),
+        "startable_candidate_count": len(startable_candidates),
+        "unassigned_startable_candidate_count": len(unassigned_startable_candidates),
+    }
+
+    if top_candidate:
+        out.update(
+            {
+                "top_candidate": _daily_action_player_key(top_candidate),
+                "top_candidate_rank": _eval_snapshot_value(top_candidate.get("ranking")),
+                "top_candidate_game": top_candidate.get("game_display", ""),
+                "top_candidate_lineup": top_candidate.get("lineup_status", ""),
+                "top_candidate_reason": _eval_empty_slot_candidate_reason(top_candidate, slot_id, slot_type),
+                "top_candidate_assigned_slot": assigned_by_name.get(_daily_action_player_key(top_candidate), ""),
+            }
+        )
+
+    return out
+
+
 def _eval_snapshot_value(value):
     if value in ("", None):
         return value
@@ -2546,7 +2671,10 @@ def build_batter_recommendation_preview(ctx_obj: dict, projection_view: str, min
     baseline_rows: list[dict] = []
     for slot_id, slot_type in SLOT_ORDER:
         r = baseline_assignment.get(slot_id)
-        baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
+        if r:
+            baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
+        else:
+            baseline_rows.append(_eval_batter_empty_baseline_row(slot_id, slot_type, active_owned, locks, baseline_assignment))
 
     drop_candidates = []
     for r in active_owned:
@@ -2958,7 +3086,10 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
     baseline_rows: list[dict] = []
     for slot_id, slot_type in SLOT_ORDER:
         r = baseline_assignment.get(slot_id)
-        baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
+        if r:
+            baseline_rows.append(_eval_batter_baseline_row(slot_id, r))
+        else:
+            baseline_rows.append(_eval_batter_empty_baseline_row(slot_id, slot_type, active_owned, locks, baseline_assignment))
 
     drop_candidates = []
     for r in active_owned:
@@ -3230,7 +3361,10 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
         "fa_candidate_count": len(fa_candidates),
         "top_tomorrow_fa": _daily_action_player_key(top_tomorrow_fa) if top_tomorrow_fa else "",
         "top_tomorrow_fa_rank": top_tomorrow_fa_rank,
-        "locked_count": len(locks),
+        "locked_count": len(_nonempty_lock_assignments(locks)),
+        "locked_assignments": _nonempty_lock_assignments(locks),
+        "manual_locked_assignments": _nonempty_lock_assignments(manual_choices),
+        "auto_locked_assignments": _nonempty_lock_assignments(auto_locks),
     }
 
     return top_action, action_rows, baseline_rows, summary
