@@ -535,13 +535,25 @@ def record_historical_final_roster_eval(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT eval_run_id
-                FROM rmt.eval_run
-                WHERE league_key = %s
-                  AND team_key = %s
-                  AND eval_date = %s::date
-                  AND app_section = 'batters'
-                ORDER BY eval_run_id DESC
+                SELECT r.eval_run_id
+                FROM rmt.eval_run r
+                WHERE r.league_key = %s
+                  AND r.team_key = %s
+                  AND r.eval_date = %s::date
+                  AND r.app_section = 'batters'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rmt.eval_lineup_snapshot s
+                      WHERE s.eval_run_id = r.eval_run_id
+                        AND s.snapshot_source = 'YGMA_PRE_RMT'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rmt.eval_lineup_snapshot s
+                      WHERE s.eval_run_id = r.eval_run_id
+                        AND s.snapshot_source = 'RMT_RECOMMENDED_BASELINE'
+                  )
+                ORDER BY r.eval_run_id DESC
                 LIMIT 1
                 """,
                 (league_key, team_key, eval_date),
@@ -614,13 +626,25 @@ def record_final_roster_eval(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT eval_run_id
-                FROM rmt.eval_run
-                WHERE league_key = %s
-                  AND team_key = %s
-                  AND eval_date = %s::date
-                  AND app_section = 'batters'
-                ORDER BY eval_run_id DESC
+                SELECT r.eval_run_id
+                FROM rmt.eval_run r
+                WHERE r.league_key = %s
+                  AND r.team_key = %s
+                  AND r.eval_date = %s::date
+                  AND r.app_section = 'batters'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rmt.eval_lineup_snapshot s
+                      WHERE s.eval_run_id = r.eval_run_id
+                        AND s.snapshot_source = 'YGMA_PRE_RMT'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rmt.eval_lineup_snapshot s
+                      WHERE s.eval_run_id = r.eval_run_id
+                        AND s.snapshot_source = 'RMT_RECOMMENDED_BASELINE'
+                  )
+                ORDER BY r.eval_run_id DESC
                 LIMIT 1
                 """,
                 (league_key, team_key, eval_date),

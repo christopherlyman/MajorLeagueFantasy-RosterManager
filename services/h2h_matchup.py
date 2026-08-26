@@ -174,6 +174,85 @@ def _category_stats(team: dict[str, Any]) -> dict[str, float]:
     }
 
 
+@lru_cache(maxsize=64)
+def fetch_h2h_week_matchup(
+    league_key: str,
+    team_key: str,
+    week: int,
+) -> dict[str, Any]:
+    """Return our team and opponent hitter totals for one Yahoo fantasy week."""
+    url = (
+        "https://fantasysports.yahooapis.com/fantasy/v2/"
+        f"league/{league_key}/scoreboard;week={int(week)}?format=json"
+    )
+    headers = {
+        "Authorization": f"Bearer {get_access_token()}"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=20,
+    )
+    response.raise_for_status()
+
+    matchup = _find_matchup(
+        response.json(),
+        team_key,
+    )
+
+    if len(matchup) < 2:
+        raise RuntimeError(
+            f"Yahoo matchup not found for "
+            f"{league_key} week {week} team {team_key}"
+        )
+
+    ours = next(
+        (
+            team
+            for team in matchup
+            if team["meta"].get("team_key") == team_key
+        ),
+        None,
+    )
+    opponent = next(
+        (
+            team
+            for team in matchup
+            if team["meta"].get("team_key") != team_key
+        ),
+        None,
+    )
+
+    if not ours or not opponent:
+        raise RuntimeError(
+            f"Yahoo matchup teams could not be resolved for "
+            f"{league_key} week {week} team {team_key}"
+        )
+
+    return {
+        "week": int(week),
+        "our_team": {
+            "team_key": str(
+                ours["meta"].get("team_key") or ""
+            ),
+            "name": str(
+                ours["meta"].get("name") or ""
+            ),
+            "stats": _category_stats(ours),
+        },
+        "opponent": {
+            "team_key": str(
+                opponent["meta"].get("team_key") or ""
+            ),
+            "name": str(
+                opponent["meta"].get("name") or ""
+            ),
+            "stats": _category_stats(opponent),
+        },
+    }
+
+
 def _week_urgency(current_date: str) -> float:
     try:
         weekday = datetime.strptime(current_date, "%Y-%m-%d").date().weekday()
