@@ -3030,7 +3030,11 @@ def _daily_action_threshold_gap(slot_id: str, row: dict | None) -> float | None:
         return None
 
 
-def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, list[dict], list[dict], dict]:
+def build_batter_daily_action_plan_preview(
+    ctx_obj: dict,
+    *,
+    shadow_input_out: dict | None = None,
+) -> tuple[dict | None, list[dict], list[dict], dict]:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -3057,6 +3061,32 @@ def build_batter_daily_action_plan_preview(ctx_obj: dict) -> tuple[dict | None, 
     baseline_assignment = optimize_lineup(active_owned, locks)
     baseline_score = _daily_action_rank_score(baseline_assignment)
     baseline_names = {_daily_action_player_key(r) for r in baseline_assignment.values() if r}
+
+    # Prospective Shadow Stability sidecar.
+    #
+    # This is intentionally separate from the four-item Daily
+    # Action Plan tuple and is not stored in session state.
+    if shadow_input_out is not None:
+        shadow_input_out.clear()
+        shadow_input_out.update(
+            {
+                "active_owned": [
+                    dict(row)
+                    for row in active_owned
+                ],
+                "locks": dict(locks),
+                "baseline_assignment": {
+                    slot_id: (
+                        None
+                        if row is None
+                        else dict(row)
+                    )
+                    for slot_id, row
+                    in baseline_assignment.items()
+                },
+                "slot_order": list(SLOT_ORDER),
+            }
+        )
 
     projection = build_batter_multiday_projection(ctx_obj, days=3, include_fa=True)
     owned_lookup = _projection_lookup(projection, "OWNED")
@@ -3517,7 +3547,11 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
 
     if refresh_label in {"Daily Refresh", "Recommendations Refresh"}:
         with st.spinner(f"Building Daily Action Plan from {refresh_label}..."):
-            plan = build_batter_daily_action_plan_preview(ctx_obj)
+            shadow_input: dict = {}
+            plan = build_batter_daily_action_plan_preview(
+                ctx_obj,
+                shadow_input_out=shadow_input,
+            )
             st.session_state[action_cache_key] = plan
             try:
                 from services.evaluation import record_batter_recommendation_eval
@@ -3528,6 +3562,39 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
                     plan=plan,
                 )
                 st.session_state[f"{action_cache_key}_eval_run_id"] = eval_run_id
+
+                # Shadow evidence capture occurs only after the
+                # normal Evaluation transaction has committed.
+                if str(ctx_obj.get("league_key") or "").strip() in {
+                    "469.l.41640",
+                    "469.l.60688",
+                }:
+                    try:
+                        from services.evaluation_shadow_capture import (
+                            capture_zero_penalty_shadow,
+                        )
+
+                        shadow_capture_result = capture_zero_penalty_shadow(
+                            ctx_obj=ctx_obj,
+                            eval_run_id=eval_run_id,
+                            shadow_input=shadow_input,
+                            player_key_fn=_daily_action_player_key,
+                            startable_for_slot_fn=startable_for_slot,
+                            slot_value_fn=slot_optimizer_value,
+                        )
+
+                        st.session_state[
+                            f"{action_cache_key}_shadow_capture"
+                        ] = shadow_capture_result
+
+                    except Exception as shadow_exc:
+                        st.warning(
+                            "Shadow Stability evidence capture failed "
+                            f"after Evaluation run {eval_run_id}; "
+                            "the normal Evaluation snapshot and RMT "
+                            f"recommendations are unchanged: {shadow_exc}"
+                        )
+
             except Exception as exc:
                 st.warning(f"Evaluation snapshot save failed: {exc}")
         return
