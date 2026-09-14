@@ -610,12 +610,16 @@ Purpose:
 - create the frozen evidence missing from the historical dataset;
 - make later penalty-curve replay possible without current-state leakage.
 
-Because the stability penalty is zero, the shadow assignment MUST exactly
-match the normal RMT baseline assignment slot-for-slot.
+Because the stability penalty is zero, the shadow assignment MUST match
+the normal RMT baseline in selected hitter set and total optimizer objective.
+Equivalent legal reassignment among flexible lineup slots is permitted.
 
-This parity is a hard persistence gate.
+Selected-hitter-set parity and total-objective parity are hard
+persistence gates. Exact slot placement is diagnostic evidence, not a
+persistence requirement.
 
-If zero-penalty Shadow differs from RMT:
+If zero-penalty Shadow differs from RMT in selected hitter set or
+total optimizer objective:
 
 - do not persist the shadow observation;
 - surface a diagnostic warning;
@@ -688,7 +692,8 @@ stability model.
 Do not create `rmt.eval_shadow_hitter_scorecard` rows for capture-only
 zero-penalty observations.
 
-Because zero-penalty Shadow is required to equal ordinary RMT, scoring it
+Because zero-penalty Shadow is required to match ordinary RMT in
+selected hitter set and total optimizer objective, scoring it
 would only duplicate the existing RMT scorecard.
 
 Shadow scorecards begin when a non-zero candidate stability model is run
@@ -703,10 +708,54 @@ The approved implementation sequence from this point is:
 3. add an isolated shadow integration service;
 4. read frozen YGMA incumbents using returned `eval_run_id`;
 5. run zero-penalty Shadow against the exact captured `active_owned` universe;
-6. require exact zero-penalty parity with the normal RMT assignment;
+6. require zero-penalty selected-hitter-set and total-objective parity
+   with normal RMT while preserving legal slot-placement differences as
+   diagnostic evidence;
 7. persist full player evidence only for MLF/MiLF;
 8. keep Usual excluded;
 9. restart and validate all three shared live containers;
 10. begin prospective evidence collection on subsequent normal refreshes.
 
 No stability penalty values are approved at this stage.
+
+## 17. Slot-Invariant Zero-Penalty Parity Correction
+
+**Decision date:** 2026-09-13
+
+Prospective MLF Evaluation run 72 exposed a validation-contract defect rather
+than a model-selection defect. The normal RMT optimizer and the zero-penalty
+Shadow optimizer selected the same hitter set but produced different legal
+assignments among flexible slots:
+
+- 1B / 3B / UTIL were permuted among the same selected hitters;
+- OF1 / OF2 / OF3 were permuted among the same selected outfielders;
+- the selected-player set was unchanged.
+
+Historical Evaluation work had already established that same-hitter-set,
+different-flexible-slot assignments are scoring-inert. Change-count semantics
+are also player-set based rather than slot-location based.
+
+Therefore capture-only zero-penalty parity is defined as:
+
+1. identical selected Yahoo hitter-key set;
+2. identical total optimizer objective within numerical tolerance;
+3. legal assignments produced by the production and Shadow optimizers;
+4. exact slot-for-slot equality is NOT required.
+
+The capture continues to persist both the normal RMT selected slot and the
+Shadow selected slot for every player. This preserves slot-placement
+differences for diagnostics without rejecting an otherwise equivalent
+zero-penalty solution.
+
+Capture-only persistence MUST fail closed if either:
+
+- the selected hitter sets differ; or
+- the total optimizer objectives differ beyond tolerance.
+
+The `zero_penalty_parity` metadata flag means selected-hitter-set plus
+total-objective parity. `slot_assignment_exact` is persisted separately as
+diagnostic metadata.
+
+Run 72 remains an intentionally non-persisted Shadow observation because the
+old gate rolled the capture transaction back cleanly. It must not be
+retrospectively reconstructed from incomplete ephemeral inputs.

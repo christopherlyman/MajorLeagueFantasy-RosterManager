@@ -3588,6 +3588,18 @@ def _consume_daily_refresh_action_plan_build(ctx_obj: dict) -> None:
                         ] = shadow_capture_result
 
                     except Exception as shadow_exc:
+                        # Keep the user-facing warning, but also emit the
+                        # complete exception traceback to container logs so
+                        # capture-only failures can be diagnosed without
+                        # changing normal Evaluation behavior.
+                        import logging
+
+                        logging.getLogger(__name__).exception(
+                            "Shadow Stability evidence capture failed "
+                            "after Evaluation run %s",
+                            eval_run_id,
+                        )
+
                         st.warning(
                             "Shadow Stability evidence capture failed "
                             f"after Evaluation run {eval_run_id}; "

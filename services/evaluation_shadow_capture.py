@@ -441,14 +441,6 @@ def capture_zero_penalty_shadow(
                 player_key_fn,
             )
 
-            if shadow_signature != normal_signature:
-                raise RuntimeError(
-                    "ZERO_PENALTY_PARITY_FAILURE "
-                    f"eval_run_id={eval_run_id} "
-                    f"normal={normal_signature} "
-                    f"shadow={shadow_signature}"
-                )
-
             rmt_slots = _assignment_yahoo_slots(
                 baseline_assignment,
                 slot_order,
@@ -461,16 +453,6 @@ def capture_zero_penalty_shadow(
 
             rmt_keys = set(rmt_slots)
             shadow_keys = set(shadow_slots)
-
-            original_change_count = _change_count(
-                ygma_yahoo_keys,
-                rmt_keys,
-            )
-
-            shadow_change_count = _change_count(
-                ygma_yahoo_keys,
-                shadow_keys,
-            )
 
             slot_type_by_id = {
                 slot_id: slot_type
@@ -492,6 +474,51 @@ def capture_zero_penalty_shadow(
                             row,
                         )
                     )
+
+            # Zero-penalty parity is invariant to equivalent legal
+            # placement among flexible lineup slots. The selected
+            # hitter set and total objective must still match exactly
+            # (within numerical tolerance).
+            if shadow_keys != rmt_keys:
+                raise RuntimeError(
+                    "ZERO_PENALTY_PLAYER_SET_PARITY_FAILURE "
+                    f"eval_run_id={eval_run_id} "
+                    f"normal_keys={sorted(rmt_keys)} "
+                    f"shadow_keys={sorted(shadow_keys)} "
+                    f"normal={normal_signature} "
+                    f"shadow={shadow_signature}"
+                )
+
+            objective_delta = abs(
+                float(shadow_result.base_objective)
+                - float(original_objective)
+            )
+
+            if objective_delta > 1e-9:
+                raise RuntimeError(
+                    "ZERO_PENALTY_OBJECTIVE_PARITY_FAILURE "
+                    f"eval_run_id={eval_run_id} "
+                    f"normal_objective={original_objective} "
+                    f"shadow_objective="
+                    f"{shadow_result.base_objective} "
+                    f"delta={objective_delta} "
+                    f"normal={normal_signature} "
+                    f"shadow={shadow_signature}"
+                )
+
+            slot_assignment_exact = (
+                shadow_signature == normal_signature
+            )
+
+            original_change_count = _change_count(
+                ygma_yahoo_keys,
+                rmt_keys,
+            )
+
+            shadow_change_count = _change_count(
+                ygma_yahoo_keys,
+                shadow_keys,
+            )
 
             displaced = [
                 row["yahoo_player_key"]
@@ -635,6 +662,12 @@ def capture_zero_penalty_shadow(
                         "cumulative_displacements",
                     "penalty_curve": zero_curve,
                     "zero_penalty_parity": True,
+                    "parity_definition":
+                        "selected_player_set_plus_objective",
+                    "selected_player_set_parity": True,
+                    "objective_parity": True,
+                    "slot_assignment_exact":
+                        bool(slot_assignment_exact),
                     "eligible_leagues": sorted(
                         ELIGIBLE_LEAGUES
                     ),
