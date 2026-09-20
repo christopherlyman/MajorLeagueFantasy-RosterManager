@@ -192,6 +192,29 @@ def optimize_lineup_with_stability(
         for row in rows
     ]
 
+    # Match production build_player_index ordering. The live
+    # sidecar already contains active_owned, so unavailable-player
+    # filtering has already occurred before this function runs.
+    #
+    # Strict greater-than optimizer comparisons make this ordering
+    # the deterministic tie-break contract for equal objectives.
+    players.sort(
+        key=lambda row: (
+            -int(
+                row.get(
+                    "ranking",
+                    0,
+                )
+            ),
+            str(
+                player_key_fn(
+                    row
+                )
+                or ""
+            ),
+        )
+    )
+
     slots = [
         (
             str(slot_id),

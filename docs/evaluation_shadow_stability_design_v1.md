@@ -759,3 +759,51 @@ diagnostic metadata.
 Run 72 remains an intentionally non-persisted Shadow observation because the
 old gate rolled the capture transaction back cleanly. It must not be
 retrospectively reconstructed from incomplete ephemeral inputs.
+
+## 18. Production Player-Ordering Parity Correction
+
+**Decision date:** 2026-09-16
+
+Prospective MiLF Evaluation run 81 was the first naturally observed
+three-or-more-displacement event. Production RMT displaced four YGMA starters,
+but zero-penalty Shadow failed the selected-player-set parity gate.
+
+Production RMT selected Jackson Holliday while zero-penalty Shadow selected
+Pedro Ramirez. Both had ranking 52 in the contemporaneous evidence.
+
+The production optimizer does not consume active-owned rows in arbitrary
+incoming order. `build_player_index()` removes unavailable rows and sorts the
+remaining rows by ranking descending and then `make_player_key(row)` ascending.
+
+The Shadow sidecar already contains `active_owned`, so unavailable-player
+filtering has already occurred before capture. The initial Shadow optimizer,
+however, preserved incoming row order rather than applying the remaining
+production ordering rule.
+
+Production and Shadow both use strict greater-than comparisons when replacing
+the current best dynamic-programming branch. Equal-objective alternatives
+therefore retain the first solution encountered. Different player ordering can
+consequently produce a different selected hitter set at zero penalty.
+
+### Corrected ordering contract
+
+Before constructing Shadow optimizer indices, active-owned rows MUST be sorted
+by:
+
+1. ranking descending;
+2. caller-provided production player key ascending.
+
+For live capture the caller-provided key function is
+`_daily_action_player_key`, which delegates to `make_player_key`.
+
+This ordering is a zero-penalty production-equivalence requirement. It is not
+a stability preference and does not change the stability penalty objective.
+
+Selected-player-set parity and objective parity remain hard fail-closed
+persistence gates.
+
+Run 81 remains a non-persisted diagnostic event and MUST NOT be retrospectively
+backfilled because its exact ephemeral sidecar was not persisted.
+
+A synthetic equal-ranking regression test must prove that Shadow chooses the
+same deterministic player regardless of incoming row order.
