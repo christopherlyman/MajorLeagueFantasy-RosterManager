@@ -679,6 +679,14 @@ def capture_zero_penalty_shadow(
                         len(unmatched_ygma),
                     "unmatched_ygma":
                         unmatched_ygma,
+                    "incumbent_count_requested":
+                        int(shadow_result.incumbent_count_requested),
+                    "incumbent_count_considered":
+                        int(shadow_result.incumbent_count_considered),
+                    "incumbent_count_selected":
+                        int(shadow_result.incumbent_count_selected),
+                    "displacement_count":
+                        int(shadow_result.displacement_count),
                     "slot_order": [
                         [slot_id, slot_type]
                         for slot_id, slot_type
@@ -720,6 +728,14 @@ def capture_zero_penalty_shadow(
             len(incumbent_player_keys),
         "unmatched_ygma_count":
             len(unmatched_ygma),
+        "incumbent_count_requested":
+            int(shadow_result.incumbent_count_requested),
+        "incumbent_count_considered":
+            int(shadow_result.incumbent_count_considered),
+        "incumbent_count_selected":
+            int(shadow_result.incumbent_count_selected),
+        "displacement_count":
+            int(shadow_result.displacement_count),
         "original_rmt_change_count":
             int(original_change_count),
         "shadow_change_count":

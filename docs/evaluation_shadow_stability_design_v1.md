@@ -718,6 +718,85 @@ The approved implementation sequence from this point is:
 
 No stability penalty values are approved at this stage.
 
+### 16.7 Raw lineup changes versus penalty-eligible displacement
+
+Prospective evidence must distinguish two different concepts.
+
+**Raw lineup change counts**
+
+The existing fields:
+
+- `original_rmt_change_count`
+- `shadow_change_count`
+
+retain their current meanings. They measure raw starting-hitter set differences
+between the YGMA baseline and the selected RMT/Shadow lineup.
+
+These fields remain useful diagnostic evidence and are preserved for backward
+compatibility. They MUST NOT be interpreted as the number of discretionary
+stability interventions.
+
+A raw difference can include a YGMA starter who cannot reasonably remain in the
+optimized lineup, including a player who is not a candidate for any lineup slot
+under the contemporaneous optimizer inputs. Schedule-driven removals such as
+`NO_GAME_TODAY` therefore may increase the raw change count without representing
+a discretionary lineup switch.
+
+**Penalty-eligible displacement**
+
+The stability optimizer is authoritative for the intervention count used by the
+stability objective.
+
+For every shadow optimization result, preserve:
+
+- `incumbent_count_requested`
+- `incumbent_count_considered`
+- `incumbent_count_selected`
+- `displacement_count`
+
+Their meanings are:
+
+- `incumbent_count_requested` = YGMA incumbent identities supplied to the
+  optimizer;
+- `incumbent_count_considered` = requested incumbents that are actual candidates
+  for at least one lineup slot under the frozen contemporaneous optimizer inputs;
+- `incumbent_count_selected` = considered incumbents selected by the optimized
+  assignment;
+- `displacement_count` =
+  `incumbent_count_considered - incumbent_count_selected`.
+
+Only `displacement_count` governs the progressive stability penalty and future
+stability cohort classification.
+
+A YGMA incumbent that is not considered by the optimizer does not count as a
+penalty-eligible displacement, even if that player contributes to the raw lineup
+change count.
+
+For the capture-only zero-penalty model, these four optimizer-returned values
+must be persisted in `parameters_json` and returned in capture metadata.
+Dedicated database columns are not required for v1 because
+`parameters_json` already stores model-specific reproducibility evidence.
+
+The existing raw change-count columns must not be renamed, repurposed, or
+backfilled with the new semantics.
+
+Future analysis of one/two/three/four-plus stability interventions must use
+penalty-eligible `displacement_count`, not either raw change-count field.
+
+Historical captures may receive reconstructed penalty-eligible counts only when
+the values can be deterministically reproduced from frozen contemporaneous
+evidence and the applicable frozen eligibility/slot rules. Current mutable
+roster, ranking, schedule, or eligibility state must never be substituted.
+
+If a historical capture cannot support that reconstruction, its
+penalty-eligible displacement count remains unknown. A large raw change count by
+itself is not evidence of an aggressive stability intervention.
+
+This clarification changes evidence measurement only. It does not change the
+production optimizer, production recommendations, the three-source Evaluation
+contract, or the zero-penalty parity requirement.
+
+---
 ## 17. Slot-Invariant Zero-Penalty Parity Correction
 
 **Decision date:** 2026-09-13
